@@ -14,7 +14,9 @@ WHAT IT WRITES
     <out>/<table>.jsonl     one JSON object per row, in primary-key order
 
 Every value is stored in a form that survives the round trip: timestamps as
-ISO-8601 strings, jsonb as real JSON (not a string), bytes as base64. The
+ISO-8601 strings, JSON columns as asyncpg JSON text, bytes as base64.
+The manifest records that encoding so import does not serialize JSON twice.
+Keeping the JSON text also distinguishes JSON null from SQL NULL. The
 import side reverses each of those using the column types it reads from the
 TARGET database, so a column that is jsonb here is loaded as jsonb there.
 
@@ -126,6 +128,7 @@ async def main() -> int:
     started = datetime.now()
     manifest: dict[str, Any] = {
         "taken_at": started.isoformat(),
+        "json_encoding": "asyncpg-text",
         "source_host": dsn.split("@")[-1].split("/")[0],
         "tables": {},
         "sequences": {},

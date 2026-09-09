@@ -47,13 +47,28 @@ def _decode(value: Any) -> Any:
     return value
 
 
+def _json_payload(value: Any, *, json_encoding: str = "asyncpg-text") -> str | None:
+    """Encode JSON once, supporting legacy dumps and native-JSON exports.
+
+    asyncpg returns JSON as serialized text unless a decoder is configured.
+    Older dumps contain that text; serializing it again stores a JSON string
+    where ADK expects an object. The manifest distinguishes newer exports,
+    including genuine JSON string values, from that legacy representation.
+    """
+    if value is None:
+        return None  # SQL NULL, distinct from the JSON value null.
+    if json_encoding == "asyncpg-text" and isinstance(value, str):
+        json.loads(value)  # Validate the legacy JSON before loading any rows.
+        return value
+    return json.dumps(value)
+
+
 async def _json_columns(conn: asyncpg.Connection, table: str) -> set[str]:
     """Columns the TARGET stores as json/jsonb.
 
-    asyncpg wants a *string* for a json column, and this dump holds real
-    parsed JSON - so those columns are re-serialised on the way in. Asking the
-    target rather than assuming means a column someone widened from text to
-    jsonb still loads.
+    asyncpg wants serialized JSON. The manifest tells _json_payload whether
+    each value is already serialized (legacy dumps) or native JSON. Inspect
+    the target so only JSON columns receive this conversion.
     """
     rows = await conn.fetch(
         """
@@ -84,6 +99,9 @@ async def main() -> int:
 
     dump = Path(args.dump)
     manifest = json.loads((dump / "manifest.json").read_text(encoding="utf-8"))
+    json_encoding = manifest.get("json_encoding", "asyncpg-text")
+    if json_encoding not in {"asyncpg-text", "native"}:
+        raise ValueError(f"Unsupported dump JSON encoding: {json_encoding}")
     order = manifest.get("table_order") or list(manifest["tables"])
     tables = [t for t in order if t in manifest["tables"]]
     tables += [t for t in manifest["tables"] if t not in tables]
@@ -153,8 +171,8 @@ async def main() -> int:
                         columns = list(row)
                     records.append(
                         tuple(
-                            json.dumps(_decode(row[c]))
-                            if c in as_json and row[c] is not None
+                            _json_payload(row[c], json_encoding=json_encoding)
+                            if c in as_json
                             else _decode(row[c])
                             for c in columns
                         )
