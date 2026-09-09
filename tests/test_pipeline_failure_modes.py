@@ -686,29 +686,6 @@ class ConcurrentRunsAreCountedTests(unittest.TestCase):
             )
 
 
-def _stub_account(account_id: str = "acc-test"):
-    """A connected Instagram account, for the run paths that now require one."""
-    from datetime import datetime, timedelta, timezone
-
-    from app.services.instagram_accounts import Account
-
-    return Account(
-        id=account_id,
-        ig_user_id="ig-1",
-        username="acme",
-        name="",
-        avatar_key="",
-        auth_kind="instagram_login",
-        token="tok",
-        token_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-        is_default=True,
-        disabled=False,
-        connected_by="",
-        connected_at=None,
-        last_refreshed_at=None,
-    )
-
-
 class ConcurrencySlotIsReservedTests(unittest.TestCase):
     """The cap must hold against simultaneous clicks, not just sequential ones.
 
@@ -746,14 +723,7 @@ class ConcurrencySlotIsReservedTests(unittest.TestCase):
             patch.object(db, "create_run", AsyncMock(return_value=None)),
             patch.object(db, "set_run_meta", AsyncMock(return_value=None)),
             patch.object(db, "set_run_status", AsyncMock(return_value=None)),
-            patch.object(db, "set_run_account", AsyncMock(return_value=None)),
             patch.object(db, "count_runs_since", AsyncMock(return_value=0)),
-            # A run now needs a connected Instagram account before it starts.
-            patch.object(
-                service_mod.instagram_accounts,
-                "resolve",
-                lambda _id="": _stub_account(),
-            ),
         ]
         for p in patches:
             p.start()

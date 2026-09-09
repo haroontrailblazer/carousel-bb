@@ -13,36 +13,24 @@ API (Graph API version ``settings.ig_api_version``):
 4. ``POST /{ig_user_id}/media_publish`` with the parent container id.
 5. ``GET /{media_id}?fields=permalink`` and return both ids.
 
-Credentials come from the ACCOUNT the run was started against - see
-:class:`PublishTarget` and :mod:`app.services.instagram_accounts`. They used
-to be one id and one token read from the environment, which meant a single
-publishing target for the whole console; with several accounts connectable,
-the id, the token AND the Graph host are all properties of the account. Only
-the API version is still configuration.
-
-Every HTTP call carries an explicit timeout, and any Graph API error payload
-is raised as a ``RuntimeError`` that includes Instagram's error message.
+All credentials come from :mod:`app.config` (``ig_user_id``,
+``ig_access_token``, ``ig_api_version``) - never hard-coded. Every HTTP call
+carries an explicit timeout, and any Graph API error payload is raised as a
+``RuntimeError`` that includes Instagram's error message.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import httpx
 
 from app.config import settings
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from app.services.instagram_accounts import Account
-
-# NOTE: there is no module-level Graph host any more. Which host to use is a
-# property of the TOKEN: one minted by Instagram Login works only against
-# graph.instagram.com, one from the older Facebook Login path only against
-# graph.facebook.com. Sending a token to the wrong host fails with a
-# permissions error that reads like a missing scope and is not one, so the
-# host travels with the credentials in PublishTarget.
+# Instagram Graph API lives on the Facebook Graph host for IG professional
+# accounts connected through Facebook Login.
+_GRAPH_HOST = "https://graph.facebook.com"
 
 # Explicit network timeouts (seconds) for every request.
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
@@ -57,47 +45,9 @@ _MIN_CAROUSEL_CHILDREN = 2
 _TERMINAL_FAILURE_STATUSES = {"ERROR", "EXPIRED"}
 
 
-@dataclass(frozen=True)
-class PublishTarget:
-    """Where a carousel is being published, and with whose credentials.
-
-    Built from a connected account rather than read from settings, so two runs
-    against two different accounts cannot pick up each other's token.
-    """
-
-    ig_user_id: str
-    access_token: str
-    graph_host: str
-    api_version: str
-
-    @classmethod
-    def from_account(cls, account: "Account") -> "PublishTarget":
-        """Build a target from a connected account.
-
-        Raises:
-            ValueError: when the account cannot publish - no id, or a token
-                that is missing, lapsed or unreadable. Refusing here keeps the
-                failure at the very start of the publish, before any container
-                has been created and while stopping is still free.
-        """
-        if not account.ig_user_id:
-            raise ValueError("That Instagram account has no user id.")
-        if not account.token:
-            raise ValueError(
-                f"The stored token for {account.handle or account.id} cannot "
-                f"be used. Reconnect the account from the profile page."
-            )
-        return cls(
-            ig_user_id=account.ig_user_id,
-            access_token=account.token,
-            graph_host=account.graph_host,
-            api_version=settings.ig_api_version,
-        )
-
-    @property
-    def api_base(self) -> str:
-        """The versioned Graph API base URL (no trailing slash)."""
-        return f"{self.graph_host}/{self.api_version}"
+def _api_base() -> str:
+    """Return the versioned Graph API base URL (no trailing slash)."""
+    return f"{_GRAPH_HOST}/{settings.ig_api_version}"
 
 
 def _extract_error_message(payload: Any) -> Optional[str]:
@@ -136,7 +86,6 @@ def _graph_request(
     *,
     params: Optional[dict[str, Any]] = None,
     data: Optional[dict[str, Any]] = None,
-    target: Optional[PublishTarget] = None,
 ) -> dict[str, Any]:
     """Issue one Graph API request and return the decoded JSON object.
 
@@ -144,9 +93,7 @@ def _graph_request(
     response carries an ``error`` payload (regardless of HTTP status), and
     falls back to ``raise_for_status`` for non-JSON failures.
     """
-    if target is None:
-        raise RuntimeError("A Graph API call was made with no publish target.")
-    url = f"{target.api_base}{path}"
+    url = f"{_api_base()}{path}"
     response = client.request(method, url, params=params, data=data)
     try:
         payload = response.json()
@@ -185,16 +132,12 @@ def _is_video_url(public_url: str) -> bool:
 
 
 def _create_child_container(
-    client: httpx.Client,
-    public_url: str,
-    *,
-    is_video: bool,
-    target: PublishTarget,
+    client: httpx.Client, public_url: str, *, is_video: bool
 ) -> str:
     """Create one carousel child container and return its container id."""
     data: dict[str, Any] = {
         "is_carousel_item": "true",
-        "access_token": target.access_token,
+        "access_token": settings.ig_access_token,
     }
     if is_video:
         data["media_type"] = "VIDEO"
@@ -202,7 +145,7 @@ def _create_child_container(
     else:
         data["image_url"] = public_url
     payload = _graph_request(
-        client, "POST", f"/{target.ig_user_id}/media", data=data, target=target
+        client, "POST", f"/{settings.ig_user_id}/media", data=data
     )
     container_id = payload.get("id")
     if not container_id:
@@ -267,8 +210,6 @@ def _wait_until_finished(
     client: httpx.Client,
     container_id: str,
     should_continue: Optional[Callable[[], bool]] = None,
-    *,
-    target: PublishTarget,
 ) -> None:
     """Poll a media container until its ``status_code`` is ``FINISHED``.
 
@@ -284,9 +225,8 @@ def _wait_until_finished(
             f"/{container_id}",
             params={
                 "fields": "status_code,status",
-                "access_token": target.access_token,
+                "access_token": settings.ig_access_token,
             },
-            target=target,
         )
         last_status = str(payload.get("status_code", "UNKNOWN"))
         if last_status == "FINISHED":
@@ -309,23 +249,19 @@ def _wait_until_finished(
 
 
 def _create_parent_container(
-    client: httpx.Client,
-    child_ids: list[str],
-    caption: str,
-    target: PublishTarget,
+    client: httpx.Client, child_ids: list[str], caption: str
 ) -> str:
     """Create the CAROUSEL parent container and return its id."""
     payload = _graph_request(
         client,
         "POST",
-        f"/{target.ig_user_id}/media",
+        f"/{settings.ig_user_id}/media",
         data={
             "media_type": "CAROUSEL",
             "children": ",".join(child_ids),
             "caption": caption,
-            "access_token": target.access_token,
+            "access_token": settings.ig_access_token,
         },
-        target=target,
     )
     parent_id = payload.get("id")
     if not parent_id:
@@ -340,8 +276,6 @@ def publish_carousel(
     bundle: dict,
     public_urls: list[str],
     should_continue: Optional[Callable[[], bool]] = None,
-    *,
-    account: Optional["Account"] = None,
 ) -> dict:
     """Publish the approved carousel to Instagram and return its identity.
 
@@ -355,19 +289,15 @@ def publish_carousel(
         should_continue: Asked before each irreversible step. Return False to
             abandon the publish; nothing will have been posted. This runs in a
             worker thread, so it must be cheap and thread-safe.
-        account: The connected Instagram account to publish to - the one the
-            run was started against. Required; there is no default, because
-            guessing would post to the wrong brand.
 
     Returns:
         ``{"media_id": <published IG media id>, "permalink": <post url>}``.
 
     Raises:
         ValueError: When ``public_urls`` is out of Instagram's allowed range
-            (2 to ``settings.max_carousel_slides`` items), or when no usable
-            account was given.
-        RuntimeError: When the Graph API returns an error payload, or a
-            container fails or times out processing.
+            (2 to ``settings.max_carousel_slides`` items).
+        RuntimeError: When credentials are missing or the Graph API returns
+            an error payload / a container fails or times out processing.
         PublishAborted: When ``should_continue`` said to stop. Nothing was
             posted.
     """
@@ -381,13 +311,11 @@ def publish_carousel(
             f"Carousel needs at least {_MIN_CAROUSEL_CHILDREN} slides; "
             f"got {len(public_urls)}."
         )
-    if account is None:
-        raise ValueError(
-            "No Instagram account was given for this publish. A run must be "
-            "started against a connected account; connect one from Profile -> "
-            "Instagram."
+    if not settings.ig_user_id or not settings.ig_access_token:
+        raise RuntimeError(
+            "Instagram credentials are not configured: set IG_USER_ID and "
+            "IG_ACCESS_TOKEN in the environment (.env)."
         )
-    target = PublishTarget.from_account(account)
 
     caption = str(bundle.get("caption", "") or "")
 
@@ -403,19 +331,17 @@ def publish_carousel(
         for url in public_urls:
             _still_wanted(should_continue)
             child_ids.append(
-                _create_child_container(
-                    client, url, is_video=_is_video_url(url), target=target
-                )
+                _create_child_container(client, url, is_video=_is_video_url(url))
             )
 
         # (2) Wait for every child (video transcode is asynchronous).
         for child_id in child_ids:
-            _wait_until_finished(client, child_id, should_continue, target=target)
+            _wait_until_finished(client, child_id, should_continue)
 
         # (3) Parent CAROUSEL container; poll it too before publishing.
         _still_wanted(should_continue)
-        parent_id = _create_parent_container(client, child_ids, caption, target)
-        _wait_until_finished(client, parent_id, should_continue, target=target)
+        parent_id = _create_parent_container(client, child_ids, caption)
+        _wait_until_finished(client, parent_id, should_continue)
 
         # (4) Publish. The last checkpoint - after this the post is live and
         # no amount of stopping takes it back.
@@ -424,12 +350,11 @@ def publish_carousel(
             publish_payload = _graph_request(
                 client,
                 "POST",
-                f"/{target.ig_user_id}/media_publish",
+                f"/{settings.ig_user_id}/media_publish",
                 data={
                     "creation_id": parent_id,
-                    "access_token": target.access_token,
+                    "access_token": settings.ig_access_token,
                 },
-                target=target,
             )
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             # The request left; the answer did not come back. Whether the
@@ -454,9 +379,8 @@ def publish_carousel(
             f"/{media_id}",
             params={
                 "fields": "permalink",
-                "access_token": target.access_token,
+                "access_token": settings.ig_access_token,
             },
-            target=target,
         )
         permalink = str(permalink_payload.get("permalink", ""))
 

@@ -300,9 +300,7 @@ class CoverTypographyTests(unittest.TestCase):
         # _build_overlay_png is covered for that path above), so skip rather
         # than fail when it is not present in this checkout.
         template = media_tools.settings.cover_overlay_template
-        # None when COVER_OVERLAY_TEMPLATE is unset, which is now the default -
-        # the overlay is optional and this checkout has no brand asset.
-        if template is None or not template.is_file():
+        if not template.exists():
             self.skipTest(f"cover overlay template not present: {template}")
         with Image.open(template) as source:
             scrubbed = media_tools._scrub_template_text(source.convert("RGBA"))

@@ -53,13 +53,13 @@ def _service():
     return runtime.artifact_service()
 
 
-def _put(key: str, payload: bytes, content_type: str = CONTENT_TYPE) -> None:
+def _put(key: str, payload: bytes) -> None:
     service = _service()
     service._client.put_object(  # noqa: SLF001 - one client, deliberately shared
         Bucket=service.bucket_name,
         Key=key,
         Body=payload,
-        ContentType=content_type,
+        ContentType=CONTENT_TYPE,
         CacheControl="private, max-age=60",
     )
 
@@ -98,26 +98,6 @@ async def save(email: str, payload: bytes) -> str:
     return key
 
 
-async def save_at(key: str, payload: bytes, content_type: str = CONTENT_TYPE) -> str:
-    """Store bytes at an explicit key. Returns the key.
-
-    ``save`` above owns the key for a PERSON's avatar. This one exists for
-    images whose key is decided elsewhere - an Instagram account's profile
-    picture is keyed by the account, not by an email address, and arrives as
-    PNG rather than the WebP the browser uploads.
-    """
-    if not payload:
-        raise ValueError("Refusing to store an empty image.")
-    if len(payload) > MAX_BYTES:
-        raise ValueError(
-            f"That image is {len(payload) // 1024} KB; the limit is "
-            f"{MAX_BYTES // 1024} KB."
-        )
-    await asyncio.to_thread(_put, key, payload, content_type)
-    logger.info("Stored image at %s (%d bytes).", key, len(payload))
-    return key
-
-
 async def load(key: str) -> Optional[bytes]:
     """Read an avatar back, or None when there is none stored."""
     return await asyncio.to_thread(_get, key)
@@ -139,13 +119,4 @@ async def delete(email: str) -> None:
     await asyncio.to_thread(_remove)
 
 
-__all__ = [
-    "CONTENT_TYPE",
-    "MAX_BYTES",
-    "PREFIX",
-    "delete",
-    "key_for",
-    "load",
-    "save",
-    "save_at",
-]
+__all__ = ["CONTENT_TYPE", "MAX_BYTES", "PREFIX", "delete", "key_for", "load", "save"]

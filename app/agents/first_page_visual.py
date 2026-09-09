@@ -3,7 +3,7 @@
 The cover is a 4-8 second 1080x1350 video composed from media SOURCED from the
 news update itself (never AI-generated): the announcement/event clip, or - as a
 fallback - the update's best image turned into a 6 s slow-zoom video.  The
-configured cover overlay - optional - plus the plan's hook title (white, with the
+STRANGE-COVER overlay template plus the plan's hook title (white, with the
 solid #8FB832 highlight phrase) are composited on top by
 ``app.tools.media_tools.compose_cover``.
 
@@ -318,7 +318,7 @@ async def build_cover(
     """Compose the final cover, save its artifacts, and write CoverSpec state.
 
     Smart-crops the media around its evaluated subject across the edge-to-edge
-    upper cover stage, composites the configured cover overlay (if any) plus the
+    upper cover stage, composites the STRANGE-COVER overlay template plus the
     hook title (warm-white uppercase, solid #8FB832 highlight phrase), renders
     the mp4 + first-frame poster PNG, saves both to the artifact service, and
     stores the CoverSpec in session state. Call this exactly once at the end
@@ -565,7 +565,7 @@ def build_first_page_visual_agent() -> LlmAgent:
             "sourced from the news update (never AI-generated) - announcement "
             "clip, page-scraped or web-searched media, image fallback, or a "
             "drawn placeholder as last resort - composited with the "
-            "cover overlay and the plan's hook title."
+            "STRANGE-COVER template and the plan's hook title."
         ),
         instruction=instruction,
         tools=[

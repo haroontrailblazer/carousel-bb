@@ -1,9 +1,13 @@
 """News fetcher + pipeline kick-off CLI for the Carousel Factory.
 
-Two source types are polled and normalized into :class:`app.schemas.NewsItem`
+Three source types are polled and normalized into :class:`app.schemas.NewsItem`
 payloads, deduped by URL hash, and enqueued into the ``news_queue`` table via
 :func:`app.services.db.enqueue_news`:
 
+* **Gmail newsletters** - Gmail API (readonly scope), query
+  ``settings.newsletter_query``. Auth mirrors ``app.tools.gmail_tools`` (same
+  OAuth client secrets file) but uses its own readonly token cache next to
+  ``settings.gmail_token_path`` because Google OAuth tokens are scope-bound.
 * **RSS feeds** - ``settings.rss_feeds`` parsed with ``feedparser`` (bytes are
   downloaded first with ``requests`` so every network call has an explicit
   timeout; ``feedparser.parse(url)`` itself has none).
@@ -29,11 +33,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import html as html_lib
 import logging
 import re
 import uuid
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import feedparser
@@ -46,6 +53,14 @@ from app.schemas import NewsItem
 from app.services import db
 from app.state import K_NEWS_ITEM, K_PHASE, K_RUN_ID, PHASE_DONE, PHASE_REVIEW
 
+try:  # Gmail auth helpers are reused when importable (google API deps present).
+    from app.tools import gmail_tools
+except Exception as _gmail_import_error:  # pragma: no cover - env dependent
+    gmail_tools = None  # type: ignore[assignment]
+    _GMAIL_IMPORT_ERROR: Optional[Exception] = _gmail_import_error
+else:
+    _GMAIL_IMPORT_ERROR = None
+
 logger = logging.getLogger(__name__)
 
 #: Fixed pipeline user id - the review API must resume runs with this exact
@@ -53,9 +68,11 @@ logger = logging.getLogger(__name__)
 PIPELINE_USER_ID = "pipeline"
 
 #: Session id convention: the run id doubles as the ADK session id.
+GMAIL_READONLY_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 YOUTUBE_FEED_TEMPLATE = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
 FEED_TIMEOUT_S = 30  # explicit timeout for every RSS/YouTube feed download
+GMAIL_MAX_MESSAGES = 25  # newest matches of settings.newsletter_query per poll
 MAX_ENTRIES_PER_FEED = 20
 MAX_MEDIA_URLS = 8
 MAX_BODY_CHARS = 20_000
@@ -113,6 +130,273 @@ def _unique_capped(urls: Iterable[str], cap: int = MAX_MEDIA_URLS) -> list[str]:
         if len(out) >= cap:
             break
     return out
+
+
+def _media_urls_from_html(markup: str) -> list[str]:
+    """Extract candidate media URLs from newsletter HTML.
+
+    Takes ``<img src>`` values (skipping obvious tracking pixels) plus links
+    that point at video content (YouTube/Vimeo/.mp4).
+
+    Args:
+        markup: The HTML body of the mail (may be empty).
+
+    Returns:
+        Up to :data:`MAX_MEDIA_URLS` unique http(s) URLs.
+    """
+    urls: list[str] = []
+    for src in _IMG_SRC_RE.findall(markup or ""):
+        if src.startswith(("http://", "https://")) and not _TRACKING_PIXEL_RE.search(src):
+            urls.append(src)
+    for href in _A_HREF_RE.findall(markup or ""):
+        if href.startswith(("http://", "https://")) and _VIDEO_LINK_RE.search(href):
+            urls.append(href)
+    return _unique_capped(urls)
+
+
+def _article_link_from_html(markup: str) -> str:
+    """Best-effort primary article link from newsletter HTML.
+
+    Returns the first http(s) ``<a href>`` that does not look like an
+    unsubscribe/preferences/legal link, or ``""`` when none qualifies.
+    """
+    for href in _A_HREF_RE.findall(markup or ""):
+        if href.startswith(("http://", "https://")) and not _SKIP_LINK_RE.search(href):
+            return href
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Gmail newsletters
+# ---------------------------------------------------------------------------
+def _readonly_token_path() -> Path:
+    """Token cache path for the readonly scope (separate from the send token).
+
+    Google OAuth tokens are scope-bound, so the fetcher must not overwrite the
+    send-scope token used by ``app.tools.gmail_tools``. The readonly token
+    lives next to it: ``gmail-token.json`` -> ``gmail-token-readonly.json``.
+    """
+    token = Path(settings.gmail_token_path)
+    return token.with_name(f"{token.stem}-readonly{token.suffix or '.json'}")
+
+
+def _load_readonly_credentials() -> Any:
+    """Load (or interactively create) Gmail readonly OAuth credentials.
+
+    Mirrors ``gmail_tools._load_credentials`` - cached token, refresh with an
+    explicit HTTP timeout, bounded interactive InstalledAppFlow only on
+    attended runs - but with the readonly scope and its own token cache file.
+
+    Returns:
+        Valid ``google.oauth2.credentials.Credentials`` for the readonly scope.
+
+    Raises:
+        FileNotFoundError: OAuth client secrets file missing.
+        RuntimeError: token missing/expired on an unattended run.
+    """
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    token_path = _readonly_token_path()
+    credentials_path = Path(settings.gmail_credentials_path)
+
+    creds: Optional[Credentials] = None
+    if token_path.exists():
+        try:
+            creds = Credentials.from_authorized_user_file(
+                str(token_path), GMAIL_READONLY_SCOPES
+            )
+        except (ValueError, OSError) as exc:  # corrupt/partial token file
+            logger.warning(
+                "Ignoring unreadable Gmail readonly token %s: %s", token_path, exc
+            )
+            creds = None
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(gmail_tools._TimeoutRequest())
+        except Exception as exc:
+            logger.warning(
+                "Gmail readonly token refresh failed (%s); starting OAuth flow.", exc
+            )
+            creds = None
+
+    if not creds or not creds.valid:
+        if not credentials_path.exists():
+            raise FileNotFoundError(
+                "Gmail OAuth client secrets not found at "
+                f"{credentials_path}. Set GMAIL_CREDENTIALS_PATH in .env."
+            )
+        if not gmail_tools._interactive_auth_allowed():
+            raise RuntimeError(
+                "Gmail readonly token missing/expired - run the fetcher once "
+                "locally (set GMAIL_ALLOW_INTERACTIVE_AUTH=1) to create "
+                f"{token_path}. Interactive OAuth is disabled on unattended "
+                "runs so the fetcher fails loudly instead of blocking."
+            )
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(credentials_path), GMAIL_READONLY_SCOPES
+        )
+        creds = flow.run_local_server(
+            port=0, timeout_seconds=gmail_tools.INTERACTIVE_AUTH_TIMEOUT_S
+        )
+
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(creds.to_json(), encoding="utf-8")
+    return creds
+
+
+def _gmail_readonly_service() -> Any:
+    """Build a readonly Gmail API service with explicit per-request timeouts."""
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+
+    creds = _load_readonly_credentials()
+    authed_http = AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=gmail_tools.HTTP_TIMEOUT_S)
+    )
+    return build(
+        "gmail",
+        "v1",
+        http=authed_http,
+        cache_discovery=False,
+        static_discovery=True,  # bundled discovery doc: no network fetch
+    )
+
+
+def _decode_b64url(data: str) -> str:
+    """Decode a Gmail base64url body chunk to text ('' on bad input)."""
+    padded = data + "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    except ValueError:  # binascii.Error is a ValueError subclass
+        return ""
+
+
+def _extract_bodies(payload: dict) -> tuple[str, str]:
+    """Walk a Gmail message payload tree and collect text bodies.
+
+    Args:
+        payload: ``message["payload"]`` from ``messages.get(format="full")``.
+
+    Returns:
+        ``(plain_text, html_markup)`` - either may be empty.
+    """
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    stack: list[dict] = [payload]
+    while stack:
+        part = stack.pop(0)
+        stack.extend(part.get("parts") or [])
+        mime = str(part.get("mimeType") or "")
+        data = str(((part.get("body") or {}).get("data")) or "")
+        if not data:
+            continue
+        text = _decode_b64url(data)
+        if mime.startswith("text/plain"):
+            plain_parts.append(text)
+        elif mime.startswith("text/html"):
+            html_parts.append(text)
+    return "\n".join(plain_parts), "\n".join(html_parts)
+
+
+def _newsletter_payload(msg: dict) -> Optional[dict]:
+    """Normalize one Gmail message into an enqueue-ready NewsItem payload.
+
+    Args:
+        msg: Full message resource (``messages.get(format="full")``).
+
+    Returns:
+        ``NewsItem.model_dump(mode="json")`` plus an explicit ``url_hash``
+        derived from the Gmail message id (newsletters rarely have one
+        canonical URL), or ``None`` when the message carries no usable text.
+    """
+    msg_id = str(msg.get("id") or "")
+    payload = msg.get("payload") or {}
+    headers = {
+        str(h.get("name") or "").lower(): str(h.get("value") or "")
+        for h in payload.get("headers") or []
+    }
+    subject = headers.get("subject", "").strip() or "(no subject)"
+    sender = headers.get("from", "").strip()
+
+    published: Optional[datetime] = None
+    if headers.get("date"):
+        try:
+            published = parsedate_to_datetime(headers["date"])
+        except (TypeError, ValueError):
+            published = None
+
+    plain, markup = _extract_bodies(payload)
+    body_text = plain.strip() or _html_to_text(markup)
+    snippet = str(msg.get("snippet") or "").strip()
+    if not (body_text or snippet):
+        logger.warning("Gmail message %s has no readable body; skipped.", msg_id)
+        return None
+
+    item = NewsItem(
+        id=f"gmail-{msg_id}" if msg_id else uuid.uuid4().hex,
+        title=subject,
+        summary=snippet,
+        body=body_text[:MAX_BODY_CHARS],
+        source_name=sender,
+        source_url=_article_link_from_html(markup),
+        media_urls=_media_urls_from_html(markup),
+        published_at=published,
+        tags=["newsletter", "gmail"],
+    )
+    data = item.model_dump(mode="json")
+    # Dedupe on the message id, not on a body link that may be a shared story.
+    data["url_hash"] = db.url_hash(f"gmail:{msg_id or subject}")
+    return data
+
+
+def fetch_gmail_newsletters() -> list[dict]:
+    """Fetch newsletter mails matching ``settings.newsletter_query``.
+
+    Returns:
+        Enqueue-ready payload dicts (possibly empty). Auth/API failures are
+        logged and yield an empty list so the other sources still run.
+    """
+    if gmail_tools is None:
+        logger.warning(
+            "Gmail fetching disabled - app.tools.gmail_tools not importable: %s",
+            _GMAIL_IMPORT_ERROR,
+        )
+        return []
+    query = settings.newsletter_query.strip()
+    if not query:
+        logger.info("NEWSLETTER_QUERY empty; skipping Gmail.")
+        return []
+    try:
+        service = _gmail_readonly_service()
+        listing = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=GMAIL_MAX_MESSAGES)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Gmail newsletter fetch failed: %s", exc)
+        return []
+
+    payloads: list[dict] = []
+    for ref in listing.get("messages") or []:
+        try:
+            msg = (
+                service.users()
+                .messages()
+                .get(userId="me", id=ref["id"], format="full")
+                .execute()
+            )
+            data = _newsletter_payload(msg)
+            if data:
+                payloads.append(data)
+        except Exception as exc:
+            logger.warning("Skipping Gmail message %s: %s", ref.get("id"), exc)
+    logger.info("Gmail: %d newsletter item(s) for query %r.", len(payloads), query)
+    return payloads
 
 
 # ---------------------------------------------------------------------------
@@ -322,14 +606,9 @@ def fetch_youtube_feeds() -> list[dict]:
 
 
 def fetch_all() -> list[dict]:
-    """Poll all configured sources (RSS, YouTube). Blocking I/O.
-
-    Gmail newsletters used to be a third source. It was removed: this console
-    reviews through Telegram and never sent mail, so the only thing Gmail did
-    was read newsletters - and with no credentials on the host it failed on
-    every scheduler tick, hourly, forever.
-    """
+    """Poll all configured sources (Gmail, RSS, YouTube). Blocking I/O."""
     payloads: list[dict] = []
+    payloads.extend(fetch_gmail_newsletters())
     payloads.extend(fetch_rss_feeds())
     payloads.extend(fetch_youtube_feeds())
     return payloads

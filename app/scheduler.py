@@ -21,7 +21,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from app.services import db, instagram_accounts, instagram_oauth
+from app.services import db
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +38,6 @@ DEFAULT_SCHEDULE: dict = {
 #: assumes one instance, a second one starting by accident would otherwise
 #: double-fetch and race on the queue's unique url_hash.
 _FETCH_LOCK_ID = 0x0CA1_0F01
-
-#: Advisory-lock id for the Instagram token refresh. Its own id, not the fetch
-#: one: the two jobs are unrelated and must never block each other.
-_IG_REFRESH_LOCK_ID = 0x0CA1_0F02
-
-#: When to renew Instagram tokens. Daily, in the small hours - a token has a
-#: fortnight of slack before it matters, so this never needs to be prompt.
-IG_REFRESH_CRON = "17 4 * * *"
 
 _scheduler: Any = None
 
@@ -106,8 +98,8 @@ async def run_fetch_once() -> dict:
             logger.info("Another process is already fetching; skipping this tick.")
             return {"skipped": "locked"}
 
-        # Deferred import: the fetcher pulls in feedparser and the agent
-        # stack. The scheduler module itself must stay cheap to import.
+        # Deferred import: the fetcher pulls in feedparser, Gmail auth and the
+        # agent stack. The scheduler module itself must stay cheap to import.
         #
         # Two calls, not one: fetch_all() only POLLS the sources and returns
         # payloads - enqueue_items() is what writes them to news_queue and
@@ -138,76 +130,6 @@ async def run_fetch_once() -> dict:
                 logger.debug("Could not release the fetch advisory lock.")
 
 
-async def refresh_instagram_tokens() -> dict:
-    """Renew every long-lived Instagram token that is close to expiring.
-
-    Meta's long-lived tokens last 60 days and can be extended at any point
-    after their first 24 hours - but ONLY while still valid. A lapsed token
-    has no recovery call; the account has to be connected again by hand. So
-    this runs daily with a fortnight of slack, and a failure has two weeks of
-    further attempts before it becomes somebody's problem.
-
-    Each account is refreshed independently: one failing token must not stop
-    the others, because they are unrelated credentials that merely happen to
-    be renewed by the same job.
-
-    Returns:
-        ``{"refreshed": n, "failed": n}`` - for the log and for tests.
-    """
-    due = instagram_accounts.due_for_refresh()
-    if not due:
-        return {"refreshed": 0, "failed": 0}
-
-    refreshed = 0
-    failed = 0
-    for account in due:
-        try:
-            token, expires_in = await asyncio.to_thread(
-                instagram_oauth.refresh_long_lived, account.token
-            )
-            await instagram_accounts.record_refreshed(account.id, token, expires_in)
-            refreshed += 1
-            logger.info(
-                "Refreshed the Instagram token for %s (%d days were left).",
-                account.handle,
-                account.expires_in_days or 0,
-            )
-        except Exception as exc:  # noqa: BLE001 - network, Meta, or storage
-            failed += 1
-            logger.error(
-                "Could not refresh the Instagram token for %s: %s. It expires "
-                "in %s days; reconnect the account if this keeps failing.",
-                account.handle,
-                exc,
-                account.expires_in_days,
-            )
-    return {"refreshed": refreshed, "failed": failed}
-
-
-async def _refresh_instagram_tokens_locked() -> None:
-    """The scheduled entry point, behind an advisory lock."""
-    pool = None
-    try:
-        pool = await db.get_pool()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Instagram refresh skipped; no database: %s", exc)
-        return
-    async with pool.acquire() as conn:
-        got = await conn.fetchval("SELECT pg_try_advisory_lock($1)", _IG_REFRESH_LOCK_ID)
-        if not got:
-            logger.info("Another instance is refreshing Instagram tokens; skipping.")
-            return
-        try:
-            await refresh_instagram_tokens()
-        finally:
-            try:
-                await conn.execute(
-                    "SELECT pg_advisory_unlock($1)", _IG_REFRESH_LOCK_ID
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug("Could not release the Instagram refresh lock.")
-
-
 async def start_scheduler() -> Optional[Any]:
     """Start the scheduler, or return ``None`` if it cannot run.
 
@@ -227,13 +149,9 @@ async def start_scheduler() -> Optional[Any]:
         return None
 
     schedule = await load_schedule()
-    fetching = bool(schedule.get("enabled", True))
-    if not fetching:
-        # NOT an early return any more. Instagram tokens expire on their own
-        # schedule and have nothing to do with whether the newsroom polls its
-        # feeds; returning here left them to lapse on any console with
-        # fetching switched off.
+    if not schedule.get("enabled", True):
         logger.info("Scheduled fetching is disabled in app_config.")
+        return None
 
     scheduler = AsyncIOScheduler(
         job_defaults={
@@ -255,23 +173,10 @@ async def start_scheduler() -> Optional[Any]:
         )
         trigger = CronTrigger.from_crontab(DEFAULT_SCHEDULE["fetch_cron"])
 
-    if fetching:
-        scheduler.add_job(
-            run_fetch_once, trigger, id="fetch_news", replace_existing=True
-        )
-    scheduler.add_job(
-        _refresh_instagram_tokens_locked,
-        CronTrigger.from_crontab(IG_REFRESH_CRON),
-        id="refresh_instagram_tokens",
-        replace_existing=True,
-    )
+    scheduler.add_job(run_fetch_once, trigger, id="fetch_news", replace_existing=True)
     scheduler.start()
     _scheduler = scheduler
-    logger.info(
-        "Scheduler started: fetching %s, Instagram tokens on %r.",
-        f"on {schedule['fetch_cron']!r}" if fetching else "off",
-        IG_REFRESH_CRON,
-    )
+    logger.info("Scheduler started: fetching on %r.", schedule["fetch_cron"])
     return scheduler
 
 
@@ -285,15 +190,8 @@ async def reschedule() -> None:
 
     schedule = await load_schedule()
     if not schedule.get("enabled", True):
-        # Only the fetch job. remove_all_jobs() used to be right when fetching
-        # was the only thing scheduled; it now also deletes the Instagram
-        # token refresh, which would quietly let every connected account lapse
-        # sixty days after somebody turned fetching off.
-        try:
-            _scheduler.remove_job("fetch_news")
-        except Exception:  # noqa: BLE001 - already absent
-            pass
-        logger.info("Scheduled fetching disabled; fetch job removed.")
+        _scheduler.remove_all_jobs()
+        logger.info("Scheduled fetching disabled; jobs removed.")
         return
     _scheduler.add_job(
         run_fetch_once,

@@ -182,14 +182,6 @@ async def resume_pipeline(
         # for the whole of a rework. _drive_run has always heartbeated for
         # exactly this reason; this path simply never did.
         observability.bind_run(run_id)
-        # And the brand marks. A rejected carousel comes back through HERE to
-        # be reworked, and a rework re-renders slides - which stamp the
-        # account's handle and profile picture. This path never went through
-        # _drive_run, so without binding the identity the first re-rendered
-        # slide would refuse for want of an account.
-        from app.runs.service import _bind_brand_identity
-
-        await _bind_brand_identity(run_id)
         cancellation.clear(run_id)
         beat = asyncio.get_running_loop().create_task(
             _heartbeat(run_id, deadline=RESUME_TIMEOUT_S),

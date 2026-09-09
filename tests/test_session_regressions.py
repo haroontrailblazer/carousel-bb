@@ -138,29 +138,6 @@ class EveryCancellationRaisesTheFlagTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-def _stub_account(account_id: str = "acc-test"):
-    """A connected Instagram account, for the run paths that now require one."""
-    from datetime import datetime, timedelta, timezone
-
-    from app.services.instagram_accounts import Account
-
-    return Account(
-        id=account_id,
-        ig_user_id="ig-1",
-        username="acme",
-        name="",
-        avatar_key="",
-        auth_kind="instagram_login",
-        token="tok",
-        token_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-        is_default=True,
-        disabled=False,
-        connected_by="",
-        connected_at=None,
-        last_refreshed_at=None,
-    )
-
-
 class ClaimedStoryIsTheStoryClosedTests(unittest.IsolatedAsyncioTestCase):
     """Claiming a queue row and closing one must name the SAME row.
 
@@ -199,15 +176,9 @@ class ClaimedStoryIsTheStoryClosedTests(unittest.IsolatedAsyncioTestCase):
             patch.object(db, "create_run", fake_create_run),
             patch.object(db, "set_run_meta", AsyncMock(return_value=None)),
             patch.object(db, "set_run_status", AsyncMock(return_value=None)),
-            patch.object(db, "set_run_account", AsyncMock(return_value=None)),
             patch.object(db, "count_runs_since", AsyncMock(return_value=0)),
             patch("app.agent.build_runner", lambda: runner),
             patch.object(service_mod, "spawn_run", lambda *a, **k: None),
-            # A run now needs a connected Instagram account before it can
-            # start: the account's handle is stamped into the artwork.
-            patch.object(
-                service_mod.instagram_accounts, "resolve", lambda _id="": _stub_account()
-            ),
         ]
         for p in patches:
             p.start()
@@ -299,7 +270,7 @@ class AmbiguousPublishIsNotRetriedTests(unittest.TestCase):
 
         calls = {"n": 0}
 
-        def fake_request(client, method, path, params=None, data=None, target=None):
+        def fake_request(client, method, path, params=None, data=None):
             calls["n"] += 1
             if path.endswith("/media_publish"):
                 raise httpx.ReadTimeout("reply never arrived")
@@ -307,33 +278,23 @@ class AmbiguousPublishIsNotRetriedTests(unittest.TestCase):
                 return {"id": "container-1"}
             return {"status_code": "FINISHED"}
 
-        # The credentials come from the run's connected account now, not from
-        # settings - only the API version is still configuration.
-        from datetime import datetime, timedelta, timezone
-
-        from app.services.instagram_accounts import Account
-
-        account = Account(
-            id="acc-1",
-            ig_user_id="ig-1",
-            username="acme",
-            name="",
-            avatar_key="",
-            auth_kind="instagram_login",
-            token="tok",
-            token_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-            is_default=True,
-            disabled=False,
-            connected_by="",
-            connected_at=None,
-            last_refreshed_at=None,
-        )
-        with patch.object(instagram_tools, "_graph_request", fake_request):
+        # settings is a frozen dataclass, so swap the module's reference to it
+        # rather than trying to assign a field.
+        fake_settings = type(
+            "S",
+            (),
+            {
+                "ig_user_id": "ig-1",
+                "ig_access_token": "tok",
+                "max_carousel_slides": 10,
+            },
+        )()
+        with patch.object(instagram_tools, "_graph_request", fake_request), \
+             patch.object(instagram_tools, "settings", fake_settings):
             with self.assertRaises(instagram_tools.PublishUncertain) as caught:
                 instagram_tools.publish_carousel(
                     {"caption": "c"},
                     ["https://x/a.mp4", "https://x/b.png"],
-                    account=account,
                 )
 
         self.assertTrue(

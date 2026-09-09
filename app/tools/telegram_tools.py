@@ -1,14 +1,13 @@
 """Telegram tools - review-request and publish-confirmation messages.
 
-The review channel for the Carousel Factory, and the only one. Used by the
-Review Dispatcher agent (:func:`send_review_message`) and the Publisher agent
-(:func:`send_confirmation_message`).
+The review channel for the Carousel Factory. Used by the Review Dispatcher
+agent (:func:`send_review_message`) and the Publisher agent
+(:func:`send_confirmation_message`), mirroring the signatures the Gmail tools
+used so the agent layer is unchanged apart from which module it calls.
 
-It replaced a Gmail-based review mail, and was chosen because the setup is a
-bot token and a chat id - no Google Cloud project, no OAuth consent screen, no
-browser round trip, and no 7-day refresh-token expiry to re-do every week.
-Nothing in this console sends mail any more; ``app/tools/gmail_tools.py`` and
-the Gmail newsletter source in the fetcher have both been removed.
+Chosen over the Gmail API because the setup is a bot token and a chat id -
+no Google Cloud project, no OAuth consent screen, no browser round trip, and
+no 7-day refresh-token expiry to re-do every week.
 
 The review button is an inline keyboard **URL** button pointing at the console's
 own review screen, which is behind the login. URL buttons are handled entirely

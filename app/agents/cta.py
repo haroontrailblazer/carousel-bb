@@ -31,7 +31,7 @@ from app.llm import resolve_model
 from app.schemas import CTASlide
 from app.state import AGENT_CTA, K_CTA_SLIDE, K_RUN_ID, set_model
 from app.text_rules import require_no_em_dash
-from app.tools import brand_identity, image_gen
+from app.tools import image_gen
 
 logger = logging.getLogger(__name__)
 
@@ -191,28 +191,12 @@ def _discover_template_ref(heading_hint: str) -> str:
     return ""
 
 
-def _handle_for_run() -> str:
-    """The handle of the Instagram account this run publishes to.
-
-    Was ``settings.ig_handle`` - one global for the whole console. With
-    several accounts connectable the answer is per run, and comes from the
-    brand identity set when the run started.
-    """
-    return brand_identity.require_handle()
-
-
 def _normalized_handle() -> str:
-    """The run's IG handle with a leading ``@`` (or ``""`` outside a run).
-
-    Returns empty rather than raising because the CTA copy path can run
-    before any account context exists, and a CTA without a handle simply
-    omits the follow line - whereas the RAIL, which cannot omit anything,
-    does raise.
-    """
-    try:
-        return _handle_for_run()
-    except brand_identity.NoBrandIdentity:
-        return ""
+    """Return the configured IG handle with a leading ``@`` (or ``""``)."""
+    handle = settings.ig_handle.strip()
+    if handle and not handle.startswith("@"):
+        handle = "@" + handle
+    return handle
 
 
 def _display_link(url: str) -> str:

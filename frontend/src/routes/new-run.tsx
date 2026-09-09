@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useSearchParams } from "react-router"
 import { toast } from "sonner"
 
@@ -7,8 +7,7 @@ import { AgentComposer, type ComposerState } from "@/components/agent/agent-comp
 import { AgentWorkspace } from "@/components/agent/agent-workspace"
 import { BrandLogo } from "@/components/layout/brand-logo"
 import { useRunWorkspace } from "@/hooks/use-run-workspace"
-import { ApiError, get, post } from "@/lib/api"
-import type { InstagramAccountSummary, Meta } from "@/lib/types"
+import { ApiError, post } from "@/lib/api"
 
 /**
  * Headlines for the empty state, one picked at random per visit.
@@ -45,63 +44,6 @@ function looksLikeUrl(value: string): boolean {
 }
 
 /**
- * Which account this carousel is for.
- *
- * Shown BEFORE the run starts because the choice is not merely where the post
- * goes: the account's handle and profile picture are composited into every
- * slide as it is generated. Choosing afterwards would mean re-rendering the
- * carousel or shipping one brand's artwork under another's name.
- *
- * Hidden entirely when only one account is connected - a picker with one
- * option is a decision nobody is being asked to make.
- */
-function AccountPicker({
-  accounts,
-  value,
-  onChange,
-  disabled,
-}: {
-  accounts: InstagramAccountSummary[]
-  value: string
-  onChange: (accountId: string) => void
-  disabled: boolean
-}) {
-  const usable = accounts.filter((account) => !account.needs_reconnect)
-  if (usable.length < 2) return null
-
-  return (
-    <div
-      className="mt-4 flex flex-wrap items-center justify-center gap-2"
-      aria-label="Publish to"
-    >
-      <span className="text-[11px] text-[var(--muted-foreground)]">
-        Posting as
-      </span>
-      {usable.map((account) => {
-        const selected = account.id === value
-        return (
-          <button
-            key={account.id}
-            type="button"
-            disabled={disabled}
-            aria-pressed={selected}
-            onClick={() => onChange(account.id)}
-            className={
-              "rounded-[10px] border px-2.5 py-1.5 text-xs transition-colors disabled:cursor-default disabled:opacity-50 " +
-              (selected
-                ? "border-[var(--foreground)] bg-[var(--muted)] text-[var(--foreground)]"
-                : "border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:bg-[var(--muted)]")
-            }
-          >
-            {account.handle}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-/**
  * The New carousel screen.
  *
  * Two states in one route. With no `?run=`, it is a composer and a question.
@@ -129,22 +71,9 @@ export function NewRunRoute() {
 
   const workspace = useRunWorkspace(runId)
 
-  const meta = useQuery({ queryKey: ["meta"], queryFn: () => get<Meta>("/api/meta") })
-  const accounts = React.useMemo(
-    () => meta.data?.accounts ?? [],
-    [meta.data?.accounts],
-  )
-  // Empty means "whichever is default", which is what the server does with an
-  // empty account_id - so there is no wrong state while /meta is in flight.
-  const [accountId, setAccountId] = React.useState("")
-
   const start = useMutation({
-    mutationFn: (payload: {
-      source: string
-      topic?: string
-      url?: string
-      account_id?: string
-    }) => post<{ run_id: string; title: string }>("/api/runs", payload),
+    mutationFn: (payload: { source: string; topic?: string; url?: string }) =>
+      post<{ run_id: string; title: string }>("/api/runs", payload),
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ["runs"] })
       setSubmittedPrompt(value.trim())
@@ -166,13 +95,6 @@ export function NewRunRoute() {
         })
         return
       }
-      if (code === "no_account" || code === "account_needs_reconnect") {
-        toast.error("No Instagram account", {
-          description:
-            "Connect one from Profile -> Instagram. Its handle and picture are part of the artwork, so a carousel cannot be generated without one.",
-        })
-        return
-      }
       toast.error(error instanceof Error ? error.message : "Could not start that carousel.")
     },
   })
@@ -180,10 +102,7 @@ export function NewRunRoute() {
   function submit() {
     const trimmed = value.trim()
     if (trimmed.length < 3) return
-    start.mutate({
-      ...(isUrl ? { source: "url", url: trimmed } : { source: "topic", topic: trimmed }),
-      account_id: accountId,
-    })
+    start.mutate(isUrl ? { source: "url", url: trimmed } : { source: "topic", topic: trimmed })
   }
 
   /** Back to an empty composer. The run keeps working; Tasks still has it. */
@@ -283,13 +202,6 @@ export function NewRunRoute() {
               </button>
             ))}
           </div>
-
-          <AccountPicker
-            accounts={accounts}
-            value={accountId || (accounts.find((a) => a.is_default)?.id ?? "")}
-            onChange={setAccountId}
-            disabled={start.isPending}
-          />
 
           <p className="mt-5 text-center text-[11px] leading-5 text-[var(--muted-foreground)]">
             Carousel Factory can make mistakes. Every carousel pauses for human review before publishing.

@@ -33,16 +33,9 @@ from google.adk.tools import FunctionTool, ToolContext
 from app.config import agent_instructions, settings
 from app.llm import resolve_model
 from app.schemas import Bundle
-from app.services import db, instagram_accounts
+from app.services import db
 from app.services.artifact_service import SupabaseArtifactService
-from app.state import (
-    AGENT_PUBLISHER,
-    K_ACCOUNT_ID,
-    K_BUNDLE,
-    K_RUN_ID,
-    PHASE_DONE,
-    get_model,
-)
+from app.state import AGENT_PUBLISHER, K_BUNDLE, K_RUN_ID, PHASE_DONE, get_model
 from app.tools import instagram_tools, telegram_tools
 
 logger = logging.getLogger(__name__)
@@ -57,44 +50,6 @@ from app.state import K_PUBLISH_RESULT  # noqa: E402
 # Lazily constructed fallback when the runner's wired artifact service is not
 # a SupabaseArtifactService (e.g. in-memory local runs).
 _fallback_artifact_service: Optional[SupabaseArtifactService] = None
-
-
-class NoPublishAccount(Exception):
-    """The run names no usable Instagram account to publish to."""
-
-
-def _account_for_run(state: Any) -> instagram_accounts.Account:
-    """The account this run was started against.
-
-    Deliberately NOT falling back to the default account. The slides were
-    already stamped with one account's handle and profile picture when they
-    were generated; posting them anywhere else publishes a carousel that
-    visibly belongs to a different brand. A named failure here is recoverable
-    - a wrong post is not.
-
-    Raises:
-        NoPublishAccount: when the run names no account, the account has since
-            been disconnected, or its token can no longer be used.
-    """
-    account_id = str(state.get(K_ACCOUNT_ID) or "")
-    if not account_id:
-        raise NoPublishAccount(
-            "This run is not linked to an Instagram account, so there is "
-            "nowhere to publish it. Runs started before accounts were "
-            "connected have to be re-run against one."
-        )
-    account = instagram_accounts.get(account_id)
-    if account is None:
-        raise NoPublishAccount(
-            f"The Instagram account this run was created for ({account_id}) "
-            f"is no longer connected."
-        )
-    if account.needs_reconnect:
-        raise NoPublishAccount(
-            f"The connection to {account.handle or account_id} has expired. "
-            f"Reconnect it from Profile -> Instagram and re-run."
-        )
-    return account
 
 
 def _resolve_artifact_service(
@@ -170,17 +125,6 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
             "message": "Bundle has no ordered_artifacts; nothing to publish.",
         }
 
-    # Resolved BEFORE any URL is signed or any container is created: an
-    # account problem is a configuration problem, and it costs nothing to
-    # discover it while nothing has been uploaded yet.
-    try:
-        account = _account_for_run(state)
-    except NoPublishAccount as exc:
-        logger.error("Run %s cannot publish: %s", state.get(K_RUN_ID), exc)
-        result = {"status": "error", "retryable": False, "message": str(exc)}
-        state[K_PUBLISH_RESULT] = result
-        return result
-
     run_id = str(state.get(K_RUN_ID) or "")
     session = tool_context.session
 
@@ -229,7 +173,6 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
             bundle.model_dump(mode="json"),
             public_urls,
             should_continue=lambda: not cancellation.is_requested(run_id),
-            account=account,
         )
     except asyncio.CancelledError:
         # Stop cancels the driving task, and CancelledError lands HERE - at

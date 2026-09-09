@@ -12,7 +12,6 @@ the same data and the same media, and change nothing in the application.
 | `migrations/003_lockdown.sql` | Row-level security. |
 | `migrations/004_title_lock.sql` | `runs.title_locked`. **Never applied to the live database** — see below. |
 | `migrations/005_transfer_baseline.sql` | **Every table, in one file.** Apply this to an empty database and you have the whole structure. |
-| `migrations/006_instagram_accounts.sql` | `instagram_accounts` + `runs.account_id`. Apply after `005`. |
 | `../scripts/db_export.py` | Dump every table to JSONL. |
 | `../scripts/db_import.py` | Load a dump into a target. |
 | `../scripts/db_verify_baseline.py` | Check `005` against a live database. |
@@ -40,15 +39,10 @@ encrypted with `SECRETS_KEY`, and `sessions` holds whatever the pipeline put in
 session state. `backups/` is gitignored — keep it that way, and do not paste
 these files anywhere.
 
-`instagram_accounts.token_enc` is encrypted the same way and carries the same
-warning: each row is an access token that can post to somebody's Instagram.
-
 **`SECRETS_KEY` must move with the data.** Those credentials are Fernet-encrypted
 against it. Restore `app_config` into a deployment with a different key and the
 rows decrypt to nothing; the console will tell you to reconnect the bot from the
-profile page, which is the honest outcome but means re-entering the token. The same is true of every row in
-`instagram_accounts`: a different key means every account shows as needing
-reconnection, and each has to be connected again through Instagram.
+profile page, which is the honest outcome but means re-entering the token.
 
 **Copy `app_users` or you cannot sign in.** Auth is an allowlist. An empty table
 means nobody has access, including you.

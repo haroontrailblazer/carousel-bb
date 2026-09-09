@@ -11,7 +11,7 @@ Three jobs (see docs/CONTRACTS.md file map):
    trim it into the configured cover window (settings.cover_clip_min_s..max_s,
    default 4-15 s), silent H.264 mp4.
 3. ``compose_cover(...)``       - subject-aware edge-to-edge crop across the
-   visible cover stage, composite the configured cover overlay (optional) plus a
+   visible cover stage, composite the STRANGE-COVER overlay template plus a
    Pillow-rendered title block (warm-white, condensed extra-bold uppercase,
    solid green highlight phrase), and produce the final cover mp4 + poster.
 
@@ -96,10 +96,8 @@ _TITLE_MAX_WIDTH_FRAC = 0.78
 _TITLE_CENTER_Y_FRAC = 0.79  # matches the template's own title-block center
 
 # Region of the template occupied by its baked-in EXAMPLE title text
-# ("STOP PROMPTING YOUR AI, GIVE IT A LOOP") - measured on the original
-# STRANGE-COVER (1).png, which is no longer in this repository. The numbers
-# still describe the geometry any replacement overlay must match; the region
-# is scrubbed before compositing the real title.
+# ("STOP PROMPTING YOUR AI, GIVE IT A LOOP") - measured on the shipped
+# STRANGE-COVER (1).png. It is scrubbed before compositing the real title.
 # Fractions of width/height; excludes the side arrow glyphs (0.093-0.167 and
 # 0.839-0.907) and the grid floor.
 _TEMPLATE_TEXT_BOX = (0.175, 0.705, 0.83, 0.872)  # (x0, y0, x1, y1)
@@ -1000,7 +998,7 @@ def placeholder_background(workdir: str = "") -> str:
     """Build the deterministic dark 1080x1350 fallback background still.
 
     Used when NO sourced media exists at all: a subtle top-to-bottom dark
-    gradient the cover overlay + title composite onto, so a cover is
+    gradient the STRANGE-COVER overlay + title composite onto, so a cover is
     ALWAYS produced. Pure Pillow - this is a drawn background, not AI-generated
     imagery, so it does not violate the sourced-cover rule.
 
@@ -1189,7 +1187,7 @@ _SCRUBBED_TEMPLATE_CACHE: dict[tuple[str, float], Image.Image] = {}
 def _scrub_template_text(tpl: Image.Image) -> Image.Image:
     """Remove the template's baked-in example title text, in place.
 
-    An overlay template may carry a baked-in reference title
+    The shipped STRANGE-COVER template contains its reference title
     ("STOP PROMPTING YOUR AI, GIVE IT A LOOP") rendered into the dissolve
     zone. Clear the complete reserved title box, interpolating the surrounding
     overlay alpha across each row. Clearing the whole reservation removes the
@@ -1234,37 +1232,21 @@ _TEMPLATE_WARNED = False
 def _load_scrubbed_template() -> Optional[Image.Image]:
     """Load the overlay template with its example text scrubbed (cached).
 
-    Returns ``None`` when there is no usable template, which is a supported
-    state: ``_build_overlay_png`` then draws a plain gradient so a missing
-    brand asset degrades the cover instead of failing the run.
-
-    Two different "no template" cases, and only one of them deserves a warning:
-
-    * NOT CONFIGURED (``None``) - nothing is wrong. The overlay is optional and
-      nobody asked for one, so saying anything would be noise. This used to be
-      impossible to express: the setting defaulted to a filename in the repo
-      root that is not in git, so an unconfigured install warned on every boot
-      about a file it had invented.
-    * CONFIGURED BUT ABSENT - somebody named a file and it is not there. That
-      is a real misconfiguration and is said out loud once, because an
-      unbranded cover nobody noticed shipping is worse than a run that stopped.
-
-    ``is_file()`` rather than ``exists()``: a path pointing at a DIRECTORY
-    exists, and would be handed to ``Image.open``, which fails with a
-    PermissionError on Windows that names neither this setting nor a cause.
+    Returns ``None`` when the file is absent, which is a supported state:
+    ``_build_overlay_png`` then draws a plain gradient so a missing brand asset
+    degrades the cover instead of failing the run. It is still worth saying out
+    loud once - an unbranded cover that nobody noticed shipping is worse than a
+    run that stopped.
     """
     global _TEMPLATE_WARNED
     path = settings.cover_overlay_template
-    if path is None:
-        return None
-    if not path.is_file():
+    if not path.exists():
         if not _TEMPLATE_WARNED:
             _TEMPLATE_WARNED = True
             logging.getLogger(__name__).warning(
                 "Cover overlay template not found at %s - covers will be "
                 "rendered with a plain gradient instead of the brand overlay. "
-                "Point COVER_OVERLAY_TEMPLATE at a real file, or unset it to "
-                "silence this.",
+                "Set COVER_OVERLAY_TEMPLATE or restore the file to fix.",
                 path,
             )
         return None
@@ -1514,7 +1496,7 @@ def compose_cover(
 
     The media fills the visible upper cover stage with a subject-aware crop;
     the lower headline area is black rather than a blurred/shrunken duplicate.
-    The cover overlay, when one is configured, plus the Pillow-rendered title
+    The STRANGE-COVER overlay template plus the Pillow-rendered title block are
     composited on top, and ffmpeg renders a silent H.264 mp4 (``+faststart``)
     with a first-frame poster PNG. Still images become a 6 s restrained
     slow-zoom video (static video fallback if the zoom filter fails).

@@ -33,16 +33,14 @@ from app.config import settings
 from app.runs import cancellation
 from app.runs.bus import KIND_ERROR, KIND_TERMINAL
 from app.runs.stream import consume_invocation, record_event
-from app.services import avatar_store, db, instagram_accounts
+from app.services import db
 from app.state import (
-    K_ACCOUNT_ID,
     K_NEWS_ITEM,
     K_RUN_ID,
     PHASE_DONE,
     PHASE_GENERATE,
     PHASE_REWORK,
 )
-from app.tools import brand_identity
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +280,6 @@ async def start_run(
     url: str = "",
     news: Optional[dict] = None,
     requested_by: str = "",
-    account_id: str = "",
 ) -> StartedRun:
     """Create a run, seed its session, and start driving it in the background.
 
@@ -296,32 +293,10 @@ async def start_run(
         url: Article URL, for ``source="url"``.
         news: A ready NewsItem payload, for ``source="queue"``/``"schedule"``.
         requested_by: Email of the person who asked, for the audit trail.
-        account_id: The connected Instagram account to generate and publish
-            for. Empty selects the default account. Resolved BEFORE anything
-            is created, because the account's handle and profile picture are
-            composited into every slide as it is generated.
 
     Raises:
-        RunRefused: cap exceeded, no usable Instagram account, or the input
-            could not be turned into a run.
+        RunRefused: cap exceeded, or the input could not be turned into a run.
     """
-    account = instagram_accounts.resolve(account_id)
-    if account is None:
-        raise RunRefused(
-            "no_account",
-            "Connect an Instagram account from Profile -> Instagram before "
-            "creating a carousel. The account's handle and profile picture "
-            "are part of the artwork, so a run cannot be generated without "
-            "one."
-            if not account_id
-            else f"Instagram account {account_id} is not connected.",
-        )
-    if account.needs_reconnect:
-        raise RunRefused(
-            "account_needs_reconnect",
-            f"The connection to {account.handle} has expired. Reconnect it "
-            f"from Profile -> Instagram.",
-        )
     # The id is minted BEFORE the cap check so the slot can be reserved under
     # it. Everything after the check - a session write, three DB writes, and
     # for a pasted URL a thirty-second fetch - happens while this run already
@@ -362,7 +337,7 @@ async def start_run(
             (news or {}).get("title") or (topic or "").strip()[:150] or "Untitled"
         )
 
-        state: dict[str, Any] = {K_RUN_ID: run_id, K_ACCOUNT_ID: account.id}
+        state: dict[str, Any] = {K_RUN_ID: run_id}
         if news is not None:
             state[K_NEWS_ITEM] = news
 
@@ -379,10 +354,6 @@ async def start_run(
         await db.set_run_meta(
             run_id, title=title, source=source, requested_by=requested_by
         )
-        # On the ROW as well as in session state: resume and startup recovery
-        # rebuild a run from the database and have to know which brand to
-        # render before the session is read.
-        await db.set_run_account(run_id, account.id)
         await db.set_run_status(run_id, db.RUN_STATUS_RUNNING)
 
         first_message = (
@@ -492,59 +463,6 @@ async def _heartbeat(run_id: str, deadline: float = RUN_TIMEOUT_S) -> None:
     )
 
 
-async def _bind_brand_identity(run_id: str) -> None:
-    """Make this task render for the account the run was created against.
-
-    Read from the RUN ROW rather than session state, because resume and
-    startup recovery rebuild a run from the database and have to restore the
-    brand before the first slide is re-rendered.
-
-    Binds nothing when the run names no usable account. That is deliberate:
-    ``brand_identity.require_handle`` then refuses at the first slide, which
-    is a loud, local failure - whereas quietly falling back to some other
-    account would stamp the wrong brand onto artwork nobody re-checks.
-    """
-    try:
-        account_id = await db.get_run_account_id(run_id)
-    except Exception as exc:  # noqa: BLE001 - a read failure must not kill the run
-        logger.warning("Could not read the account for run %s: %s", run_id, exc)
-        return
-    if not account_id:
-        logger.warning(
-            "Run %s names no Instagram account; brand furniture will refuse "
-            "to render.",
-            run_id,
-        )
-        return
-
-    account = instagram_accounts.get(account_id)
-    if account is None:
-        logger.warning(
-            "Run %s names Instagram account %s, which is no longer connected.",
-            run_id,
-            account_id,
-        )
-        return
-
-    # Best effort: the picture is a mark on the rail, and a bucket hiccup
-    # should degrade it to a monogram rather than stop the run.
-    favicon = b""
-    if account.avatar_key:
-        try:
-            favicon = await avatar_store.load(account.avatar_key) or b""
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Could not load the profile picture for %s: %s",
-                account.handle,
-                exc,
-            )
-
-    brand_identity.set_current(
-        brand_identity.from_account(account, favicon_png=favicon)
-    )
-    logger.info("Run %s renders and publishes as %s.", run_id, account.handle)
-
-
 async def _drive_run(run_id: str, runner: Any, message: Any) -> None:
     """Consume one invocation and record how it ended.
 
@@ -572,12 +490,6 @@ async def _drive_run(run_id: str, runner: Any, message: Any) -> None:
         _heartbeat(run_id), name=f"heartbeat-{run_id}"
     )
     try:
-        # Bind the brand marks INSIDE the try, not above it. This awaits a
-        # database read, so it is a suspension point where a shutdown drain
-        # can land - and outside the try that cancellation would skip the
-        # handler that raises the stop flag, leaving a publish already running
-        # in a worker thread with nothing telling it to abort.
-        await _bind_brand_identity(run_id)
         result = await asyncio.wait_for(
             consume_invocation(
                 runner,

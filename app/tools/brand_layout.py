@@ -1,14 +1,8 @@
-"""Deterministic footer furniture for generated slides.
+"""Deterministic Baskaran Builds footer furniture for generated slides.
 
 Image models create the editorial content, but the brand favicon, handle,
 swipe arrow, and their padding are composited here so every carousel uses
 identical geometry and exact text.
-
-The GEOMETRY is fixed; the MARKS are not. Which handle and which profile
-picture get drawn belongs to whichever Instagram account the run is targeting,
-and comes from ``app.tools.brand_identity``. This module used to load a single
-favicon checked into the repository, which was right while the console
-published to one account and silently wrong the moment a second was connected.
 """
 
 from __future__ import annotations
@@ -20,8 +14,6 @@ from pathlib import Path
 from typing import Literal
 
 from PIL import Image, ImageDraw, ImageFont, ImageStat
-
-from app.tools import brand_identity
 
 
 SlideKind = Literal["body", "cta"]
@@ -117,6 +109,12 @@ _HEADLINE_FONT_CANDIDATES = (
     Path("/usr/share/fonts/truetype/liberation/LiberationSansNarrow-Bold.ttf"),
     Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+)
+_OFFICIAL_FAVICON = (
+    Path(__file__).resolve().parents[2]
+    / "skills"
+    / "references"
+    / "baskaranbuilds-favicon.png"
 )
 
 
@@ -541,15 +539,12 @@ def _draw_round_line(
 
 
 def _favicon_from_source(size: int) -> Image.Image:
-    """The profile mark of the account this run is publishing to.
-
-    Raises:
-        brand_identity.NoBrandIdentity: when no account is in context. That is
-            deliberate: there is no safe default here, because drawing some
-            other account's logo would mis-brand a post that nobody would
-            check before it went live.
-    """
-    return brand_identity.require_favicon(size)
+    """Load the exact favicon served by baskaranbuilds.com."""
+    if not _OFFICIAL_FAVICON.is_file():
+        raise FileNotFoundError(f"Baskaran Builds favicon not found: {_OFFICIAL_FAVICON}")
+    with Image.open(_OFFICIAL_FAVICON) as source:
+        favicon = source.convert("RGBA")
+    return favicon.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def _draw_handle(
@@ -560,17 +555,8 @@ def _draw_handle(
     center_y: int,
     fill: tuple[int, int, int],
 ) -> None:
-    """Draw the account's handle with exact spelling and vertical centering.
-
-    An empty handle is an error rather than a default. The old fallback named
-    one specific account, which on a console with several connected is not a
-    safe guess - it is a wrong one that ships.
-    """
-    text = handle.strip()
-    if not text:
-        raise brand_identity.NoBrandIdentity(
-            "The brand rail was asked to draw an empty handle."
-        )
+    """Draw the configured handle with exact spelling and vertical centering."""
+    text = handle.strip() or "@baskaranbuilds"
     if not text.startswith("@"):
         text = "@" + text
     font = _font(32)

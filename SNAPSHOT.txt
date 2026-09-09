@@ -1,6 +1,10 @@
 Source: C:\Projects\carousel
-Commit: 25647e232824c98268b6e99b3e73479b36810c1b
-Commit date: 2026-08-30 09:40:33 +05:30
-Snapshot: immediately before dbcf2e9 introduced the Designs page.
-Contains all Git-tracked files at that commit.
-Local .env, installed dependencies, generated files, and Git history are not included.
+Commit: 5afc6640b4288c22378f73da3cb5f8016b51322c
+Commit date: 2026-08-28 07:51:35 +05:30
+Last complete version before account-bound generation (0f45d3d) and Designs (dbcf2e9).
+Generation uses bundled skills, reference assets, and the static Baskaran Builds brand.
+Instagram connection and design selection are not prerequisites for generation.
+Publishing uses the historical IG_USER_ID and IG_ACCESS_TOKEN environment settings.
+Generation source and all assets match this commit; generated Python caches are excluded.
+The existing session-expiry fix and its tests from 45ad065 are retained in web_api/auth.py and tests/test_session_expiry.py.
+Local .env and restored database are preserved separately and never committed.

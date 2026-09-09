@@ -67,15 +67,8 @@ Example shape: `YOUR AGENT LOOKS SMART UNTIL REALITY HITS`, highlighting
 - If the source is a paper or UI screenshot, keep one identifiable proof region
   visible rather than blurring the entire image behind the title.
 
-## Cover overlay template
+## Legacy template note
 
-The overlay is OPTIONAL and there is none in this repository. `COVER_OVERLAY_TEMPLATE`
-is unset by default, and covers render with a plain gradient - the composition,
-crop and title block are all produced in code and do not depend on it.
-
-The geometry constants in `app/tools/media_tools.py` were measured on the
-original `STRANGE-COVER (1).png`, which has since been deleted. Any replacement
-overlay must match that geometry: the grain dissolve, grid and side arrows in the
-same positions. Runtime compositing scrubs the template's example title and
-recolors legacy orange accents to the single `#8FB832` token before rendering
-new copy.
+`STRANGE-COVER (1).png` remains the geometry source for the grain dissolve,
+grid, and arrows. Runtime compositing scrubs its example title and recolors its
+legacy orange accents to the single `#8FB832` token before rendering new copy.

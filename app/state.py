@@ -50,11 +50,6 @@ PHASE_DONE = "done"
 # ---------------------------------------------------------------------------
 K_RUN_ID = "run_id"
 K_PHASE = "phase"
-#: Which connected Instagram account this run is for. Chosen BEFORE the run
-#: starts, because the account's handle and profile picture are stamped into
-#: the slide artwork as it is generated - not just used at publish time. See
-#: app/tools/brand_identity.py.
-K_ACCOUNT_ID = "account_id"          # str - instagram_accounts.id
 K_NEWS_ITEM = "news_item"            # NewsItem dict
 K_RESEARCH = "research_brief"        # ResearchBrief dict
 K_PLAN = "carousel_plan"             # CarouselPlan dict

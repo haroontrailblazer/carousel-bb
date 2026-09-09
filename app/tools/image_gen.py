@@ -46,7 +46,6 @@ from PIL import Image, ImageOps
 from app import observability
 from app.config import load_skill, settings
 from app.text_rules import require_no_em_dash, require_readable_text
-from app.tools import brand_identity
 from app.tools.brand_layout import (
     INK,
     PAPER,
@@ -205,16 +204,6 @@ def _style_prompt() -> str:
     """Load the design system text from skills/design-skill.md (with fallback)."""
     skill = load_skill("design-skill.md").strip()
     return skill if skill else _FALLBACK_STYLE
-
-
-def _current_handle() -> str:
-    """The handle of the account this run publishes to.
-
-    Reads the run's brand identity rather than a global. There is no fallback
-    on purpose: a slide stamped with the wrong account's handle is a mistake
-    that only shows up after the carousel is live.
-    """
-    return brand_identity.require_handle()
 
 
 def _template_file(template_ref: str) -> Optional[Tuple[str, bytes, str]]:
@@ -488,7 +477,7 @@ def generate_slide_image(
             copy_lines,
             theme="paper",
         )
-        branded = apply_body_brand_rail(typeset, _current_handle(), slide_no)
+        branded = apply_body_brand_rail(typeset, settings.ig_handle, slide_no)
     branded.save(result, format="PNG")
     logger.info("Rendered body slide %s -> %s", tag, result)
     return result
@@ -530,7 +519,7 @@ def generate_cta_image(
     }
     hint = variant_hints.get(cta_type, variant_hints["follow"])
     all_lines = [line for line in lines if line and line.strip()]
-    normalized_handle = _current_handle().strip().lstrip("@").lower()
+    normalized_handle = settings.ig_handle.strip().lstrip("@").lower()
     normalized_link = link_text.strip().lstrip("@").lower()
     render_lines = list(all_lines)
     if link_text and normalized_link != normalized_handle:
@@ -575,7 +564,7 @@ def generate_cta_image(
         )
         branded = apply_cta_brand_rail(
             typeset,
-            _current_handle(),
+            settings.ig_handle,
         )
     branded.save(result, format="PNG")
     logger.info("Rendered CTA slide (%s) -> %s", cta_type, result)

@@ -37,7 +37,7 @@ from app.runs.service import (
     resume_interrupted_run,
     start_run,
 )
-from app.services import db, instagram_accounts
+from app.services import db
 from app.state import (
     K_REVIEW_NOTICE_FAILED,
     AGENT_CTA,
@@ -113,10 +113,6 @@ class StartRunRequest(BaseModel):
     topic: str = ""
     url: str = ""
     news_id: str = ""
-    #: Which connected Instagram account to generate and publish for. Empty
-    #: selects the default. Chosen BEFORE the run because the account's handle
-    #: and profile picture are composited into the slide artwork.
-    account_id: str = ""
 
 
 class VerdictRequest(BaseModel):
@@ -268,7 +264,6 @@ async def create_run(
             url=payload.url,
             news=news,
             requested_by=identity.email,
-            account_id=payload.account_id,
         )
     except RunRefused as exc:
         # Picking a story from the newsroom CLAIMED it (queued -> processing)
@@ -961,11 +956,7 @@ async def meta(_identity: Identity = Depends(current_identity)) -> dict:
         ],
         "reject_question": REJECT_QUESTION,
         "max_slides": settings.max_carousel_slides,
-        # Was "are the IG_* env vars set". Now: is there an account that
-        # could actually be published to right now - which also goes false
-        # when the only connected account's token has lapsed.
-        "publish_configured": instagram_accounts.configured(),
-        "accounts": instagram_accounts.listing(),
+        "publish_configured": bool(settings.ig_user_id and settings.ig_access_token),
     }
 
 

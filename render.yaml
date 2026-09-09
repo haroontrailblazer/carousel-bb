@@ -64,6 +64,8 @@ services:
       # Setting it to anything else silently breaks every resume.
       - key: PUBLIC_BASE_URL
         sync: false          # https://<service>.onrender.com
+      - key: MAX_REWORK_ROUNDS
+        value: "5"
       - key: MAX_CAROUSEL_SLIDES
         value: "10"
 
@@ -102,6 +104,10 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false          # public by design; ships in the browser bundle
+      - key: SUPABASE_SERVICE_KEY
+        sync: false          # server-side only, never sent to the browser
+      - key: SUPABASE_S3_ENDPOINT
+        sync: false
       - key: SUPABASE_S3_REGION
         value: us-west-1
       - key: SUPABASE_S3_ACCESS_KEY
@@ -129,16 +135,13 @@ services:
         sync: false
 
       # --- instagram ------------------------------------------------------
-      # IG_USER_ID, IG_ACCESS_TOKEN and IG_HANDLE are gone. Accounts are
-      # connected from the console (Profile -> Instagram) and their tokens are
-      # stored encrypted in the instagram_accounts table; the handle is a
-      # property of the account a run targets, not of the deployment.
-      #
-      # These two identify this console to Meta. The redirect URI to allowlist
-      # in the Meta app is <PUBLIC_BASE_URL>/api/settings/instagram/callback.
-      - key: IG_APP_ID
+      - key: IG_USER_ID
         sync: false
-      - key: IG_APP_SECRET
+      - key: IG_ACCESS_TOKEN
+        sync: false
+      - key: IG_API_VERSION
+        value: v23.0
+      - key: IG_HANDLE
         sync: false
 
       # --- cta destinations -----------------------------------------------
@@ -158,3 +161,5 @@ services:
         sync: false
       - key: LANGFUSE_SECRET_KEY
         sync: false
+      - key: LANGFUSE_BASE_URL
+        value: https://cloud.langfuse.com

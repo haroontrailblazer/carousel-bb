@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -21,43 +20,10 @@ def _csv(name: str, default: str = "") -> list[str]:
     return [x.strip() for x in os.getenv(name, default).split(",") if x.strip()]
 
 
-def _s3_endpoint() -> str:
-    """The storage endpoint, derived from ``SUPABASE_URL`` unless overridden.
-
-    Supabase publishes exactly one S3 endpoint per project, always at
-    ``<project url>/storage/v1/s3``. Asking for it separately meant the same
-    project identity written twice, and the failure mode when they drifted was
-    quiet rather than loud: the console would authenticate against one project
-    and read slides from another, which looks like missing artifacts rather
-    than like a configuration mistake.
-
-    An explicit ``SUPABASE_S3_ENDPOINT`` still wins - a self-hosted or proxied
-    deployment can legitimately put storage somewhere else.
-
-    Returns empty when there is no project URL at all, rather than a hostless
-    ``/storage/v1/s3``: ``app/runtime.py`` reads an empty endpoint as "storage
-    is not configured", and a bare path would read as configured and fail
-    later, further from the cause.
-    """
-    explicit = os.getenv("SUPABASE_S3_ENDPOINT", "").strip()
-    if explicit:
-        return explicit
-    base = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-    return f"{base}/storage/v1/s3" if base else ""
-
-
-def _cover_overlay_template() -> Optional[Path]:
-    """The configured cover overlay, or ``None`` when there is none.
-
-    ``None`` and not ``Path("")``: an empty string becomes ``Path(".")``, and
-    the current directory exists - so every ``.exists()`` guard downstream
-    would pass and the loader would try to open a directory as an image.
-    """
-    configured = os.getenv("COVER_OVERLAY_TEMPLATE", "").strip()
-    if not configured:
-        return None
-    path = Path(configured).expanduser()
-    return path if path.is_absolute() else PROJECT_ROOT / path
+def _project_path(name: str, default: Path) -> Path:
+    """Resolve relative path settings against the repository root."""
+    configured = Path(os.getenv(name, str(default))).expanduser()
+    return configured if configured.is_absolute() else PROJECT_ROOT / configured
 
 
 #: ADK derives an app's name from the AGENT PACKAGE DIRECTORY, so every session
@@ -95,25 +61,23 @@ class Settings:
     # --- storage / db (Supabase) ---
     database_url: str = os.getenv("DATABASE_URL", "")  # postgresql+asyncpg://...
     supabase_url: str = os.getenv("SUPABASE_URL", "")
+    supabase_service_key: str = os.getenv("SUPABASE_SERVICE_KEY", "")
     media_bucket: str = os.getenv("MEDIA_BUCKET", "carousel-media")
-    # S3-compatible credentials for the artifact service adapter.
-    #
-    # The endpoint is DERIVED from supabase_url (see _s3_endpoint); the keys
-    # are not derivable from anything - Supabase issues them separately from
-    # the anon key and the database password, because they authenticate a
-    # different protocol.
-    s3_endpoint: str = _s3_endpoint()
+    # S3-compatible credentials for the artifact service adapter
+    s3_endpoint: str = os.getenv("SUPABASE_S3_ENDPOINT", "")
     s3_region: str = os.getenv("SUPABASE_S3_REGION", "us-east-1")
     s3_access_key: str = os.getenv("SUPABASE_S3_ACCESS_KEY", "")
     s3_secret_key: str = os.getenv("SUPABASE_S3_SECRET_KEY", "")
 
     # --- mail ---
-    # There is none. This console reviews through Telegram and never sends
-    # mail, so GMAIL_SENDER / GMAIL_CREDENTIALS_PATH / GMAIL_TOKEN_PATH /
-    # REVIEWER_EMAILS are gone - all four had zero consumers, and the last
-    # thing reading them (a Gmail newsletter SOURCE in fetcher/fetch_news.py)
-    # was removed with them. With no credentials on a host it failed on every
-    # scheduler tick, hourly, and produced nothing but log noise.
+    gmail_sender: str = os.getenv("GMAIL_SENDER", "")
+    gmail_credentials_path: str = os.getenv(
+        "GMAIL_CREDENTIALS_PATH", str(PROJECT_ROOT / "secrets" / "gmail-credentials.json")
+    )
+    gmail_token_path: str = os.getenv(
+        "GMAIL_TOKEN_PATH", str(PROJECT_ROOT / "secrets" / "gmail-token.json")
+    )
+    reviewer_emails: list[str] = field(default_factory=lambda: _csv("REVIEWER_EMAILS"))
 
     # --- telegram (the review channel) ---
     # Carries the same review request the mail path did: slide previews plus
@@ -133,39 +97,25 @@ class Settings:
     secrets_key: str = os.getenv("SECRETS_KEY", "")
 
     # --- instagram ---
-    # NOTE: there is deliberately no IG_USER_ID / IG_ACCESS_TOKEN, and no
-    # IG_HANDLE. Accounts are connected from the console (Profile ->
-    # Instagram) through Meta's Instagram Login, and their tokens are stored
-    # ENCRYPTED in the instagram_accounts table - see
-    # app/services/instagram_accounts.py. Same reasoning as Telegram above:
-    # an environment fallback is a bearer credential in plaintext and a second
-    # source of truth that silently overrides what the console shows.
-    #
-    # It also stopped being answerable in the singular. With several accounts
-    # connected, "the handle" is a property of the RUN, not the process, and
-    # lives in app/tools/brand_identity.py.
-    #
-    # These two ARE app-level identifiers rather than user credentials: they
-    # identify this console to Meta, the same for every account connected
-    # through it. They belong in the environment.
-    ig_app_id: str = os.getenv("IG_APP_ID", "")
-    ig_app_secret: str = os.getenv("IG_APP_SECRET", "")
+    ig_user_id: str = os.getenv("IG_USER_ID", "")
+    ig_access_token: str = os.getenv("IG_ACCESS_TOKEN", "")
     ig_api_version: str = os.getenv("IG_API_VERSION", "v23.0")
 
     # --- CTA destinations ---
     substack_url: str = os.getenv("SUBSTACK_URL", "")
     youtube_url: str = os.getenv("YOUTUBE_URL", "")
+    ig_handle: str = os.getenv("IG_HANDLE", "@baskaranbuilds")
 
     # --- fetcher sources ---
-    # Two, not three. NEWSLETTER_QUERY and the Gmail source it drove are gone;
-    # see the mail note above.
     rss_feeds: list[str] = field(default_factory=lambda: _csv("RSS_FEEDS"))
     youtube_channels: list[str] = field(default_factory=lambda: _csv("YOUTUBE_CHANNELS"))
+    newsletter_query: str = os.getenv(
+        "NEWSLETTER_QUERY", "label:newsletters newer_than:2d"
+    )
 
     # --- web console + auth ---
     # The anon key is PUBLIC by design - it ships inside the browser bundle, so
-    # it is served to the SPA by /api/auth/config. There is no service key here:
-    # nothing in this codebase ever used one.
+    # it is served to the SPA by /api/auth/config. The service key never is.
     supabase_anon_key: str = os.getenv("SUPABASE_ANON_KEY", "")
     # Supabase signs JWTs two ways depending on project age: a shared HS256
     # secret (legacy) or asymmetric keys published as JWKS (current). Set this
@@ -190,7 +140,7 @@ class Settings:
     # --- observability (Langfuse; empty keys = tracing disabled) ---
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
-    langfuse_base_url: str = os.getenv("https://cloud.langfuse.com")
+    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
 
     # --- media / design assets ---
     ffmpeg_bin: str = os.getenv("FFMPEG_BIN", "ffmpeg")
@@ -199,25 +149,14 @@ class Settings:
     cover_clip_max_s: float = float(os.getenv("COVER_CLIP_MAX_S", "15"))
     skills_dir: Path = PROJECT_ROOT / "skills"
     workdir: Path = Path(os.getenv("WORKDIR", str(PROJECT_ROOT / ".work")))
-    # Optional brand overlay composited onto the cover. EMPTY by default, and
-    # deliberately not a filename.
-    #
-    # It used to default to "STRANGE-COVER (1).png" in the repository root - a
-    # file that is not in git and no longer exists on disk. So the default
-    # could only ever resolve to a missing file, and media_tools logged
-    # "template not found" on a path nobody had configured, which reads as a
-    # broken install rather than as an unset option.
-    #
-    # Unset now means unset: covers render with a plain gradient and say
-    # nothing. Point this at a real file to get the branded overlay back.
-    #
-    # (A `cover_reference_images` tuple lived here too, naming three more
-    # deleted files. It had zero consumers anywhere in the codebase.)
-    #
-    # None rather than Path("") when unset: Path("") is Path("."), and the
-    # current directory EXISTS - so an `.exists()` guard would pass and the
-    # loader would try to open a directory as an image.
-    cover_overlay_template: Optional[Path] = _cover_overlay_template()
+    cover_overlay_template: Path = Path(
+        os.getenv("COVER_OVERLAY_TEMPLATE", str(PROJECT_ROOT / "STRANGE-COVER (1).png"))
+    )
+    cover_reference_images: tuple[str, ...] = (
+        str(PROJECT_ROOT / "CONFIG-INSTA-1.png"),
+        str(PROJECT_ROOT / "STRANGE-COVER (1).png"),
+        str(PROJECT_ROOT / "WhatsApp Image 2026-08-11 at 4.25.57 PM.jpeg"),
+    )
     slide_width: int = 1080
     slide_height: int = 1350  # 4:5 - first item's aspect ratio governs the carousel
 
