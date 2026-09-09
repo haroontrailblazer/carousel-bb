@@ -1,12 +1,13 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Hourglass } from "lucide-react"
+import { Download, Hourglass, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { ApprovalCard } from "@/components/review/approval-card"
 import { CarouselViewer } from "@/components/review/carousel-viewer"
 import { Card } from "@/components/ui/card"
-import { ApiError, get, post } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { ApiError, downloadFile, get, post } from "@/lib/api"
 import { isStopped, PHASE_LABELS } from "@/lib/pipeline"
 import { cn } from "@/lib/utils"
 import type { CoverChoice, Meta, RunArtifacts, RunDetail } from "@/lib/types"
@@ -32,6 +33,17 @@ export function ReviewPanel({ run, fit = false }: { run: RunDetail; fit?: boolea
   const runId = run.run_id
   const queryClient = useQueryClient()
   const [coverChoice, setCoverChoice] = React.useState<CoverChoice>(null)
+
+  React.useEffect(() => setCoverChoice(null), [runId])
+
+  const download = useMutation({
+    mutationFn: (choice: Exclude<CoverChoice, null>) =>
+      downloadFile(`/api/runs/${encodeURIComponent(runId)}/download?cover=${choice}`, `${runId}-carousel.zip`),
+    onError: (error) => {
+      if (error instanceof ApiError && error.sessionExpired) return
+      toast.error(error instanceof Error ? error.message : "Could not download the carousel.")
+    },
+  })
 
   const artifacts = useQuery({
     queryKey: ["artifacts", runId],
@@ -108,6 +120,11 @@ export function ReviewPanel({ run, fit = false }: { run: RunDetail; fit?: boolea
   const cover = artifacts.data?.cover
   const coverChoiceNeeded =
     !!cover && !!cover.video?.url && !!cover.poster?.url && !coverChoice
+  const downloadCover = coverChoice ?? (
+    cover?.video?.url && !cover.poster?.url ? "video" :
+    cover?.poster?.url && !cover.video?.url ? "image" : null
+  )
+  const downloadReady = !!artifacts.data?.complete && !!downloadCover && run.status !== "running"
 
   const stopped = isStopped(run.status)
 
@@ -118,17 +135,39 @@ export function ReviewPanel({ run, fit = false }: { run: RunDetail; fit?: boolea
     (artifacts.error instanceof ApiError ? artifacts.error.status === 404 : false)
 
   const approval = (
-    <ApprovalCard
-      run={run}
-      publishConfigured={meta.data?.publish_configured ?? true}
-      coverChoiceNeeded={coverChoiceNeeded}
-      busy={decide.isPending}
-      onApprove={() => decide.mutate({ status: "approved", feedback: "" })}
-      onReject={(feedback) => decide.mutate({ status: "rejected", feedback })}
-      onResend={() => resend.mutate()}
-      resending={resend.isPending}
-      embedded={!!artifacts.data}
-    />
+    <>
+      {artifacts.data && (
+        <div className="mb-5 space-y-2 border-b border-[var(--border)] pb-5">
+          <Button
+            variant="default"
+            className="w-full"
+            disabled={!downloadReady || download.isPending}
+            onClick={() => { if (downloadCover) download.mutate(downloadCover) }}
+          >
+            {download.isPending ? <Loader2 className="animate-spin" /> : <Download />}
+            {download.isPending ? "Preparing download…" : "Download carousel"}
+          </Button>
+          <p className="text-xs text-[var(--muted-foreground)]" aria-live="polite">
+            {!artifacts.data.complete || run.status === "running"
+              ? "Available when the carousel finishes rendering."
+              : !downloadCover
+                ? "Select a video or image cover to download."
+                : `One ZIP: ${downloadCover} cover, all slides and CTA.`}
+          </p>
+        </div>
+      )}
+      <ApprovalCard
+        run={run}
+        publishConfigured={meta.data?.publish_configured ?? true}
+        coverChoiceNeeded={coverChoiceNeeded}
+        busy={decide.isPending}
+        onApprove={() => decide.mutate({ status: "approved", feedback: "" })}
+        onReject={(feedback) => decide.mutate({ status: "rejected", feedback })}
+        onResend={() => resend.mutate()}
+        resending={resend.isPending}
+        embedded={!!artifacts.data}
+      />
+    </>
   )
 
   return (

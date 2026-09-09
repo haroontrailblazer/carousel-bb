@@ -173,6 +173,28 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const get = <T>(path: string) => api<T>(path)
 
+/** Download a same-origin archive using the existing session cookie. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    cache: "no-store",
+    headers: { Accept: "application/zip" },
+  })
+  if (response.status === 401) {
+    void redirectToLogin()
+    throw new ApiError("Your session has expired.", 401, "unauthenticated")
+  }
+  if (!response.ok) throw await parseError(response)
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement("a")
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 export const post = <T>(path: string, body?: unknown) =>
   api<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) })
 

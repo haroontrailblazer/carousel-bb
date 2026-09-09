@@ -18,11 +18,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from app import runtime
 from app.config import settings
@@ -74,6 +75,7 @@ from app.state import (
 )
 from web_api.auth import Identity
 from web_api.deps import current_identity
+from web_api.carousel_download import build_archive
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +478,35 @@ async def run_artifacts(
                 "link_url": cta.get("link_url", "")},
         "ordered": bundle.get("ordered_artifacts", []),
     }
+
+
+@router.get("/runs/{run_id}/download")
+async def download_carousel(
+    run_id: str,
+    cover: Literal["video", "image"] = Query(...),
+    _identity: Identity = Depends(current_identity),
+) -> StreamingResponse:
+    """Download the selected cover, body slides and CTA as one ordered ZIP."""
+    state = await _session_state(run_id)
+    bundle = state.get(K_BUNDLE) or {}
+    if not bundle:
+        raise HTTPException(409, {"code": "download_not_ready", "message": "The carousel is still being assembled. Try again when it is ready for review."})
+    try:
+        archive = await build_archive(
+            runtime.artifact_service(), bundle=bundle, cover_choice=cover,
+            app_name=settings.app_name, user_id=PIPELINE_USER_ID, run_id=run_id,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Could not prepare carousel download for %s", run_id)
+        raise HTTPException(503, {"code": "download_failed", "message": "Could not prepare the download. Please try again."}) from None
+    return StreamingResponse(
+        iter(lambda: archive.read(64 * 1024), b""),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="carousel.zip"', "Cache-Control": "no-store"},
+        background=BackgroundTask(archive.close),
+    )
 
 
 # ---------------------------------------------------------------------------
