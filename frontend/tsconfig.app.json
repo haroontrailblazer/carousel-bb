@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+
+    // Must match resolve.alias in vite.config.ts. Configuring only one of the
+    // two is the classic shadcn-on-Vite trap: the editor resolves "@/..." fine
+    // while the build fails, or `shadcn add` writes into the wrong folder.
+    //
+    // No "baseUrl": it is deprecated and removed in TypeScript 7, and it was
+    // never needed here. Without it, "paths" resolves relative to THIS file's
+    // directory, which is the same frontend/ root baseUrl was pointing at - so
+    // "./src/*" still means frontend/src. baseUrl also had a side effect worth
+    // being rid of: it makes every folder under it importable as a bare
+    // specifier, so a stray `import x from "src/lib/api"` would have type-
+    // checked and then failed in the browser, since Vite resolves only "@/".
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src"]
+}

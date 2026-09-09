@@ -1,0 +1,28 @@
+# Carousel Factory - Python 3.11+ (tested on 3.13)
+# System requirement (not pip): ffmpeg on PATH (https://ffmpeg.org)
+
+google-adk>=2.7,<3   # pinned floor: code uses 2.7-only APIs (Aclosing, unified Context, artifact_util)
+litellm>=1.60
+openai>=1.60
+supabase>=2.10
+boto3>=1.34          # Supabase Storage S3-compatible endpoint (artifact service)
+asyncpg>=0.29
+sqlalchemy>=2.0
+feedparser>=6.0
+google-api-python-client>=2.140
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+yt-dlp
+pillow>=10.0
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27
+python-dotenv>=1.0
+pydantic>=2.7
+langfuse>=3.0,<4   # token/cost tracing (no-op without LANGFUSE_* keys)
+openinference-instrumentation-google-adk>=0.1   # exports ADK agent/LLM spans to Langfuse
+opentelemetry-api>=1.39,<=1.43    # cap required by google-adk 2.7 (langfuse would pull 1.44+)
+opentelemetry-sdk>=1.39,<=1.43
+opentelemetry-exporter-otlp>=1.39,<=1.43
+apscheduler>=3.10,<4   # in-process news fetch schedule (app/scheduler.py)
+pyjwt[crypto]>=2.9     # Supabase token verification + our session cookie

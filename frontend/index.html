@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Carousel Factory</title>
+    <meta name="description" content="Turn news into reviewed Instagram carousels." />
+    <!-- Paints the phone's own browser chrome - the address bar and the area
+         behind the status bar - to match the page. Without it the app sits in
+         a white bar in dark mode, which is the most obvious way a web app
+         announces itself as not quite an app.
+
+         Written by the script below rather than declared here as a pair of
+         prefers-color-scheme variants, because those follow the OS and this
+         app has its own light/dark switch. Someone running a dark console on
+         a light phone would get a white bar above a dark page. One tag, set
+         from the theme actually in use, cannot disagree with the screen. -->
+    <meta name="theme-color" content="#F7F7F5" />
+    <!-- The brand mark is one file, used for the tab icon and for every
+         in-app logo (see components/layout/brand-logo.tsx). Same URL both
+         places means the browser fetches it once and serves the sidebar mark
+         from cache. -->
+    <link rel="icon" href="/logo.webp" type="image/webp" />
+    <script>
+      // Apply the theme before first paint. Without this the page renders in
+      // light mode and then snaps to dark, which reads as a broken app. Kept
+      // inline and tiny on purpose - it must run before any stylesheet does.
+      try {
+        var stored = localStorage.getItem("carousel-theme");
+        var dark =
+          stored === "dark" ||
+          (stored !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+        // --background for the resolved theme. Kept in step with index.css;
+        // hooks/use-theme.ts rewrites this tag when the switch is used.
+        var bar = document.querySelector('meta[name="theme-color"]');
+        if (bar) bar.setAttribute("content", dark ? "#0F1210" : "#F7F7F5");
+        // Tells the browser the page really is dark, so scrollbars, form
+        // controls and the frame around the page are drawn to match instead
+        // of staying light.
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch (e) {
+        /* private mode, blocked storage: light mode is a fine default */
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

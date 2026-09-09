@@ -1,0 +1,54 @@
+# Keep the build context small and keep secrets out of the image.
+
+# --- secrets: never in an image ------------------------------------------
+.env
+.env.*
+!.env.example
+secrets/
+*credentials*.json
+*token*.json
+# Database dumps and the mirrored media bucket. `scripts/db_export.py` writes
+# app_config and every session in here - encrypted credentials included - and
+# db/README.md says plainly not to let these files travel. They are gitignored,
+# but a build context is not a git checkout: without this line `railway up`
+# uploads all 22 MB of them and bakes them into a deployed image.
+backups/
+
+# --- python ---------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+
+# --- node: the SPA is built INSIDE the image, from source -----------------
+# Copying a host node_modules would be both enormous and wrong (native
+# binaries built for the host platform, not the image's).
+frontend/node_modules/
+frontend/dist/
+
+# --- local state ----------------------------------------------------------
+.git/
+.adk/
+app/.adk/
+.work/
+*.log
+
+# --- docs and models ------------------------------------------------------
+# Excluded EXPLICITLY rather than with a blanket *.md, because skills/*.md and
+# skills/agents/*.md are RUNTIME INPUTS: app.config.agent_instructions and
+# load_skill read them when each agent is built. A blanket rule would leave
+# every agent silently falling back to its inline default prompt, and the
+# Learner's accumulated rules would vanish - with nothing failing loudly.
+README.md
+docs/
+architecture/
+
+# --- editors --------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

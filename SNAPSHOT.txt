@@ -1,0 +1,6 @@
+Source: C:\Projects\carousel
+Commit: 25647e232824c98268b6e99b3e73479b36810c1b
+Commit date: 2026-08-30 09:40:33 +05:30
+Snapshot: immediately before dbcf2e9 introduced the Designs page.
+Contains all Git-tracked files at that commit.
+Local .env, installed dependencies, generated files, and Git history are not included.

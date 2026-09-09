@@ -1,0 +1,37 @@
+# Secrets — never commit
+.env
+secrets/
+*credentials*.json
+*token*.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ADK local state
+.adk/
+app/.adk/
+
+# Pipeline working files (downloaded clips, rendered slides, cover composites)
+.work/
+
+# Node (likec4 tooling, if installed locally)
+node_modules/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Built SPA (produced by 'npm run build' in frontend/)
+frontend/dist/
+frontend/node_modules/
+
+# Database and media backups - contain live data and encrypted credentials
+backups/

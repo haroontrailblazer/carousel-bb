@@ -1,0 +1,355 @@
+/*
+ * Carousel Factory - C4 architecture (LikeC4)
+ *
+ * A Google ADK multi-agent pipeline that turns AI/product news (new model
+ * releases, Lovable/Supabase updates, ...) into human-approved, auto-published
+ * Instagram carousels.
+ *
+ * Preview:   npx likec4 start C:\Projects\carousel\architecture
+ * Validate:  npx likec4 validate C:\Projects\carousel\architecture
+ * Export:    npx likec4 export png -o ./diagrams C:\Projects\carousel\architecture
+ * (VS Code: install the "LikeC4" extension and open this file)
+ *
+ * Views:
+ *   index          - L1 system context
+ *   containers     - L2 deployable pieces
+ *   agentPipeline  - L3 agents inside the ADK runtime
+ *   happyPath      - news item -> carousel -> review mail
+ *   rejectRework   - rejection -> targeted re-generation -> re-review
+ *   approvePublish - approval -> Instagram auto-publish
+ *   production     - L4 deployment (Cloud Run + Supabase)
+ */
+
+specification {
+  element person {
+    notation "Person"
+    style {
+      shape person
+      color indigo
+    }
+  }
+  element system {
+    notation "Software System"
+    style {
+      color primary
+    }
+  }
+  element extSystem {
+    notation "External System"
+    style {
+      color muted
+    }
+  }
+  element container {
+    notation "Container"
+    style {
+      color blue
+    }
+  }
+  element component {
+    notation "Component"
+    style {
+      color sky
+    }
+  }
+  element agent {
+    notation "ADK Agent"
+    style {
+      color green
+    }
+  }
+  element datastore {
+    notation "Data Store"
+    style {
+      shape storage
+      color gray
+    }
+  }
+  element library {
+    notation "Versioned Library"
+    style {
+      color amber
+    }
+  }
+
+  deploymentNode environment
+  deploymentNode zone
+  deploymentNode infra {
+    notation "Infrastructure Service"
+    style {
+      color muted
+    }
+  }
+}
+
+model {
+
+  owner = person "Content Owner / Reviewer" "Approves or rejects carousels from the review mail; owns the Instagram, Substack and YouTube accounts"
+  designer = person "Designer" "Provides the carousel design skill (design tokens, layout rules) and the slide templates"
+
+  // ---- External systems ----
+  sources = extSystem "Followed Channels & News Sources" "RSS feeds, YouTube channels, X posts and vendor blogs announcing model and product updates" {
+    description "Announces updates such as Opus 5 / Fable 5 releases, Lovable and Supabase features. Also where the cover clip/image of an update is sourced from."
+  }
+  gmail = extSystem "Gmail" "Receives update newsletters; sends review and confirmation mails"
+  gemini = extSystem "Gemini API" "Google LLM endpoints (optional: used only when a *_MODEL is configured to a bare gemini-* id; the default configuration is all-OpenAI)"
+  openai = extSystem "OpenAI API" "OpenAI endpoints: LLM models through the ADK LiteLLM wrapper (model per agent is a config switch) and gpt-image-2 for slide image generation"
+  instagram = extSystem "Instagram Graph API" "Meta endpoint that auto-publishes the approved carousel" {
+    description "Video cover + image slides as carousel children. Constraints: max 10 children; cover video as a plain VIDEO child (not a Reel); the first item aspect ratio governs all slides; requires an Instagram professional account."
+  }
+  ctaTargets = extSystem "Substack / YouTube" "Owner channels that redirect-type CTA slides deep-link to"
+
+  // ---- The system ----
+  carousel = system "Carousel Factory" "Turns news/updates into approved, auto-published Instagram carousels via a Google ADK multi-agent pipeline with a human review loop" {
+
+    fetcher = container "News Fetcher" "Pulls, dedupes and ranks updates; queues one news item per run" {
+      technology "Python, Cloud Run job + Cloud Scheduler"
+      description "Scheduled job that pulls newsletters (Gmail API), RSS, YouTube and X updates, dedupes them, ranks top updates and queues one news item per pipeline run."
+    }
+
+    pipeline = container "ADK Agent Pipeline" "Runs the agent pipeline, the human-review pause and the targeted rework loop" {
+      technology "Python, google-adk, FastAPI, Cloud Run"
+
+      root = agent "Root Orchestrator" "Runs the happy path in order; pauses for the human verdict; triggers targeted rework on rejection" {
+        technology "ADK custom BaseAgent"
+      }
+      research = agent "Research Agent" "Runs FIRST: web-searches the update and hands a verified fact brief to the planner, phrasing and cover agents" {
+        technology "ADK LlmAgent + OpenAI Responses web_search tool"
+        description "Finds the official announcement, exact specs/numbers/prices with source URLs, the sharpest angle, and official announcement media (fed to the cover agent). On 'facts are wrong' rejections only this agent re-runs, forcing a re-plan on corrected facts."
+      }
+      planner = agent "Editorial Planner Agent" "The main agent: understands the news and plans the carousel" {
+        technology "ADK LlmAgent (OpenAI via LiteLLM), structured output"
+        description "Decides points vs prose style, slide count, max lines per carousel image, hook title and a CTA-type hint - grounded in the research brief."
+      }
+      visual = agent "First-Page Visual Agent" "Builds ONLY the cover: sourced 4-8 s clip + bottom black gradient + absolute hook title" {
+        technology "ADK LlmAgent + yt-dlp + FFmpeg"
+        description "Finds a 4-8 s clip of the update from the source itself (announcement/event video, trimmed with yt-dlp + FFmpeg) or falls back to the update's own image, then composites the bottom black gradient and the absolute-positioned hook title. Source clips are third-party media (rights check); downloads from cloud IPs are best-effort - the image fallback covers failures."
+      }
+      phrasing = agent "Content Phrasing Agent" "Writes final wording per slide: bullet points or max-4-line prose" {
+        technology "ADK LlmAgent (OpenAI via LiteLLM)"
+        description "Follows the planner's classification and enforces line/character budgets, then finalizes the sentences."
+      }
+      template = agent "Template Design Agent" "Generates all body slides (2..n-1) with gpt-image-2 from the designer templates" {
+        technology "ADK LlmAgent + gpt-image-2 (OpenAI Images API)"
+        description "Generates each body slide image with gpt-image-2, giving it the designer's template as reference image plus the phrased copy, following the design skill."
+      }
+      cta = agent "CTA Agent" "Picks one of three CTA types and renders the CTA slide in the same template family" {
+        technology "ADK LlmAgent + gpt-image-2 (OpenAI Images API)"
+        description "CTA types chosen by content: follow-for-more, comment, or redirect to Substack / YouTube."
+      }
+      stitch = agent "Stitch & Verify Agent" "Assembles cover + body + CTA into the carousel bundle and runs QA" {
+        technology "ADK agent + FFmpeg/Pillow QA tools"
+        description "QA checks: slide order, text overflow, generated-slide text matches the approved copy, brand rules, cover video length 4-8 s. Hands the verified bundle over for review."
+      }
+      dispatcher = agent "Review Dispatcher" "Mails the carousel preview with Approve/Reject links; parks the run as pending-review" {
+        technology "Gmail API tool + ADK LongRunningFunctionTool"
+        description "Sends the review mail to the configured reviewer addresses and pauses the ADK run until the verdict arrives."
+      }
+      router = agent "Feedback Router" "Maps rejection feedback to the responsible agent and re-runs only that agent" {
+        technology "ADK LlmAgent + custom routing"
+        description "Example: 'the first visual is not good' re-runs only the First-Page Visual Agent, passing the feedback as prompt."
+      }
+      publisher = agent "Publisher Agent" "After approval: publishes the carousel to Instagram and sends a confirmation mail" {
+        technology "ADK agent + Instagram Graph API tool"
+      }
+      learner = agent "Feedback Memory & Skill Updater" "Stores every feedback in long-term memory; distills recurring feedback into instruction and design-skill updates" {
+        technology "Custom ADK MemoryService (Postgres/pgvector) + skill-writer tool"
+        description "This is how the harness itself gets updated from feedback: recurring patterns become permanent changes to agent instructions and the design skill."
+      }
+      services = component "ADK Platform Services" "Shared plumbing: sessions/state, media artifacts, feedback memory" {
+        technology "google-adk services"
+        description "DatabaseSessionService (sessions/state), ArtifactService (media), MemoryService (custom BaseMemoryService on Postgres/pgvector - feedback memory recalled at generation time)."
+      }
+
+      // orchestration (happy path order)
+      root -> research "1. Research the update: verified facts + official media"
+      research -> planner "Hands the verified fact brief over"
+      root -> planner "2. Classify the news and plan the carousel"
+      root -> visual "3. Build the cover (only page 1)"
+      root -> phrasing "4. Write per-slide copy"
+      root -> template "5. Render the body slides"
+      root -> cta "6. Pick CTA type and render the CTA slide"
+      root -> stitch "7. Assemble and QA the carousel"
+      stitch -> dispatcher "Hands the verified bundle for review"
+      root -> router "On rejection: routes feedback for targeted rework"
+      root -> learner "Sends every feedback for storage and learning"
+      root -> publisher "On approval: hands the bundle for publishing"
+
+      // targeted rework
+      router -> visual "Re-runs when the cover is at fault"
+      router -> phrasing "Re-runs when the wording is at fault"
+      router -> template "Re-runs when the slide design is at fault"
+      router -> cta "Re-runs when the CTA is at fault"
+      router -> planner "Re-runs when the structure/classification is at fault"
+      router -> research "Re-runs when the facts are at fault (forces a re-plan)"
+
+      // LLM calls (all through OpenAI via LiteLLM in the default config)
+      research -> openai "LLM inference + live web search (Responses API web_search)"
+      planner -> openai "LLM inference via LiteLLM"
+      visual -> openai "LLM inference via LiteLLM (clip selection, title layout)"
+      phrasing -> openai "LLM inference via LiteLLM"
+      template -> openai "Generates body slide images (gpt-image-2)"
+      cta -> openai "Generates the CTA slide image (gpt-image-2)"
+      router -> openai "Classifies feedback"
+      learner -> openai "Distills feedback"
+
+      // external calls
+      research -> sources "Searches announcements, docs and coverage for facts + official media"
+      visual -> sources "Downloads the update's own announcement clip/image"
+      dispatcher -> gmail "Sends the review mail (preview + Approve/Reject links)"
+      publisher -> instagram "Uploads media and publishes the carousel"
+      publisher -> gmail "Sends the publish-confirmation mail"
+      cta -> ctaTargets "Generates redirect deep-links to"
+
+      // shared services
+      research -> services "Writes the research brief to session state"
+      planner -> services "Reads/writes session state; recalls past feedback memory"
+      visual -> services "Stores the cover video"
+      phrasing -> services "Reads the plan / writes copy"
+      template -> services "Stores slide images"
+      cta -> services "Stores the CTA slide"
+      stitch -> services "Reads all assets / stores the final bundle"
+      publisher -> services "Reads the approved bundle"
+    }
+
+    review = container "Review & Approval API" "Approve/Reject endpoints behind the review-mail links" {
+      technology "Supabase Edge Functions (or FastAPI routes on Cloud Run)"
+      description "Approve accepts optional feedback; Reject opens a small form where feedback is compulsory and asks what exactly is not good (first visual? texts? design?). Links land on a confirm page so mail-scanner prefetch cannot auto-approve. Resumes the paused run with the verdict."
+    }
+
+    db = datastore "State & Feedback Store" "News queue, run ledger, ADK sessions/state, feedback history, skill versions" {
+      technology "Supabase Postgres"
+    }
+
+    media = datastore "Media Store" "Source clips, cover videos, slide PNGs, final carousel bundles" {
+      technology "Supabase Storage"
+      description "Backend of the ADK ArtifactService via a custom BaseArtifactService adapter over the S3-compatible API (ADK ships only InMemory and GCS backends)."
+    }
+
+    skillLib = library "Skill & Template Library" "Design skill, slide/CTA templates, per-agent instructions; versioned and updated from feedback" {
+      technology "Git repo + Supabase Storage"
+    }
+
+    // fetch side
+    fetcher -> gmail "Reads newsletter mails via Gmail API"
+    fetcher -> sources "Polls RSS, YouTube and X for updates"
+    fetcher -> db "Dedupes, ranks and enqueues news items"
+    fetcher -> pipeline.root "Starts a run for the next queued news item"
+
+    // state, media and skills
+    pipeline.services -> db "Persists sessions, state and the run ledger"
+    pipeline.services -> media "Stores and serves media artifacts"
+    pipeline.learner -> db "Writes feedback history and memory records"
+    pipeline.learner -> skillLib "Commits instruction and design-skill updates"
+    pipeline.template -> skillLib "Loads templates and the design skill"
+    pipeline.cta -> skillLib "Loads CTA templates"
+    pipeline.visual -> skillLib "Loads brand fonts and title style"
+    pipeline.phrasing -> skillLib "Loads tone-of-voice rules"
+
+    // review side
+    review -> db "Records the verdict and feedback"
+    review -> pipeline.root "Resumes the paused run with verdict + feedback"
+  }
+
+  // ---- People ----
+  owner -> carousel.review "Clicks Approve (optional feedback) or Reject (compulsory feedback)"
+  designer -> carousel.skillLib "Authors the design skill and slide templates"
+  gmail -> owner "Delivers review and confirmation mails"
+}
+
+deployment {
+  prod = environment "Production" {
+    gcp = zone "Google Cloud" {
+      scheduler = infra "Cloud Scheduler" {
+        description "Cron trigger for fetch runs"
+      }
+      cloudrun = zone "Cloud Run" {
+        fetcherInstance = instanceOf carousel.fetcher
+        pipelineInstance = instanceOf carousel.pipeline
+      }
+    }
+    supabase = zone "Supabase" {
+      edge = zone "Edge Functions" {
+        reviewInstance = instanceOf carousel.review
+      }
+      pg = zone "Postgres" {
+        dbInstance = instanceOf carousel.db
+      }
+      objStorage = zone "Storage" {
+        mediaInstance = instanceOf carousel.media
+      }
+    }
+    github = zone "GitHub" {
+      skillLibInstance = instanceOf carousel.skillLib
+    }
+    gcp.scheduler -> gcp.cloudrun.fetcherInstance "Fires scheduled fetch"
+  }
+}
+
+views {
+
+  view index {
+    title "L1 - System Context"
+    description "Who and what the Carousel Factory talks to"
+    include *
+  }
+
+  view containers of carousel {
+    title "L2 - Containers"
+    description "Deployable/runtime pieces of the Carousel Factory"
+    include *
+  }
+
+  view agentPipeline of carousel.pipeline {
+    title "L3 - Agent Pipeline"
+    description "The agents plus orchestration, routing and learning inside the ADK runtime"
+    include *
+  }
+
+  dynamic view happyPath {
+    title "Happy path: news item to review mail"
+    carousel.fetcher -> carousel.pipeline.root "Starts run with the queued news item"
+    carousel.pipeline.root -> carousel.pipeline.research "Research first: verified facts, exact numbers, official media"
+    carousel.pipeline.research -> sources "Web-search the announcement, docs and coverage"
+    carousel.pipeline.root -> carousel.pipeline.planner "Classify: points vs content, lines per slide, hook title"
+    carousel.pipeline.root -> carousel.pipeline.visual "Build cover: 4-8 s source clip + gradient + title"
+    carousel.pipeline.visual -> sources "Fetch the update's own clip/image"
+    carousel.pipeline.root -> carousel.pipeline.phrasing "Write per-slide copy inside the line budget"
+    carousel.pipeline.root -> carousel.pipeline.template "Render body slides from the design skill"
+    carousel.pipeline.root -> carousel.pipeline.cta "Pick CTA type; render the CTA slide"
+    carousel.pipeline.root -> carousel.pipeline.stitch "Assemble + QA"
+    carousel.pipeline.stitch -> carousel.pipeline.dispatcher "Ready for review"
+    carousel.pipeline.dispatcher -> gmail "Send review mail"
+    gmail -> owner "Deliver Approve/Reject mail"
+  }
+
+  dynamic view rejectRework {
+    title "Reject: compulsory feedback, only the faulty agent re-runs"
+    owner -> carousel.review "Reject + compulsory feedback (e.g. the first visual is not good)"
+    carousel.review -> carousel.db "Store the feedback"
+    carousel.review -> carousel.pipeline.root "Resume run: rejected + feedback"
+    carousel.pipeline.root -> carousel.pipeline.learner "Record feedback in memory; update skills if recurring"
+    carousel.pipeline.root -> carousel.pipeline.router "Route feedback to the responsible agent"
+    carousel.pipeline.router -> carousel.pipeline.visual "Re-generate only the cover, feedback as prompt"
+    carousel.pipeline.root -> carousel.pipeline.stitch "Re-stitch with the replaced cover"
+    carousel.pipeline.stitch -> carousel.pipeline.dispatcher "Ready for re-review"
+    carousel.pipeline.dispatcher -> gmail "Send updated review mail"
+  }
+
+  dynamic view approvePublish {
+    title "Approve: optional feedback, auto-publish to Instagram"
+    owner -> carousel.review "Approve (+ optional feedback)"
+    carousel.review -> carousel.db "Store the verdict (and feedback if given)"
+    carousel.review -> carousel.pipeline.root "Resume run: approved"
+    carousel.pipeline.root -> carousel.pipeline.learner "Store the optional feedback"
+    carousel.pipeline.root -> carousel.pipeline.publisher "Publish the approved carousel"
+    carousel.pipeline.publisher -> instagram "Create carousel container + publish"
+    carousel.pipeline.publisher -> gmail "Send confirmation mail"
+  }
+
+  deployment view production {
+    title "L4 - Production Deployment"
+    description "Where each container runs"
+    include prod.**
+  }
+}
