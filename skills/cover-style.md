@@ -27,11 +27,15 @@ Legacy orange is not used for new cover text or accent furniture.
    from the title. Crop for one clear focal point; slight darkening is allowed.
 2. **Grain dissolve (bottom ~38%).** Ink rises from the bottom through a
    stippled/noise edge, never a generic smooth gradient.
-3. **Title block (lower third).** Use a large 128 px condensed bold grotesk,
+3. **Title block (lower third).** Use the bundled Anton condensed display font,
    tight editorial line height, warm-white, with exactly one verbatim phrase
    in `#8FB832`. This is intentionally larger than the fixed 76 px inside-slide
-   headline so the cover has correct feed-thumbnail proportion. Wrap to no
-   more than three balanced lines. Prefer 128 px; the compositor may reduce
+   headline so the cover has correct feed-thumbnail proportion. Use 108 px
+   Anton (about 93 px visible capitals), matching the earlier Wan cover.
+   Center the visible letter block around y=1056 at 1080x1350, with about
+   140 px line advance and a bottom limit of y=1242. Wrap to no
+   more than three balanced lines, keeping the highlighted phrase together
+   when it fits. Prefer 108 px; the compositor may reduce
    only overflowing titles to a minimum of 90 px. If the title still does not
    fit, shorten the hook and retry with the same media. Never clip the words
    or shrink below the readable minimum.

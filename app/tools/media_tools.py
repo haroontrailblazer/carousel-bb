@@ -51,7 +51,6 @@ from app.text_rules import require_no_em_dash
 from app.tools.brand_layout import (
     ACCENT_GREEN,
     HEADLINE_MAX_LINES,
-    headline_font,
 )
 
 # ---------------------------------------------------------------------------
@@ -91,10 +90,11 @@ _IMAGE_CANDIDATE_LIMIT = 5
 _TEXT_PRIMARY = (232, 228, 214, 255)  # #E8E4D6
 _ACCENT_GREEN = (*ACCENT_GREEN, 255)  # #8FB832
 _TITLE_MAX_LINES = HEADLINE_MAX_LINES
-_COVER_TITLE_FONT_SIZE = 128
+_COVER_TITLE_FONT_SIZE = 108  # Anton: ~93px visible capitals, matching the Wan cover.
 _COVER_TITLE_MIN_FONT_SIZE = 90
+_COVER_TITLE_FONT = Path(__file__).resolve().parents[2] / "assets/fonts/anton/Anton-Regular.ttf"
 _TITLE_MAX_WIDTH_FRAC = 0.78
-_TITLE_CENTER_Y_FRAC = 0.79  # matches the template's own title-block center
+_TITLE_CENTER_Y_FRAC = 0.782  # visible glyph center, measured from the Wan cover
 
 # Region of the template occupied by its baked-in EXAMPLE title text
 # ("STOP PROMPTING YOUR AI, GIVE IT A LOOP") - measured on the shipped
@@ -1082,8 +1082,8 @@ def download_image(url: str, workdir: str = "") -> str:
 
 
 def _load_title_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load the exact shared headline face used by the carousel system."""
-    return headline_font(size)
+    """Use the bundled condensed face on both developer and production hosts."""
+    return ImageFont.truetype(str(_COVER_TITLE_FONT), size=size)
 
 
 def _line_width(
@@ -1098,6 +1098,7 @@ def _wrap_title(
     title: str,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_w: float,
+    highlight: str = "",
 ) -> list[str]:
     """Wrap a cover hook into the fewest balanced shared-headline lines."""
     if _line_width(font, title) <= max_w:
@@ -1107,8 +1108,11 @@ def _wrap_title(
         return [title]
     fallback: tuple[float, list[str]] = (float("inf"), [title])
     max_lines = min(_TITLE_MAX_LINES, len(words))
+    highlight_start = title.find(highlight) if highlight else -1
+    highlight_end = highlight_start + len(highlight)
     for line_count in range(2, max_lines + 1):
         best: tuple[float, list[str]] = (float("inf"), [title])
+        best_fitting: tuple[float, list[str]] | None = None
         for cuts in combinations(range(1, len(words)), line_count - 1):
             boundaries = (0, *cuts, len(words))
             lines = [
@@ -1117,11 +1121,19 @@ def _wrap_title(
             ]
             widths = [_line_width(font, line) for line in lines]
             score = max(widths) + (max(widths) - min(widths)) * 0.12
+            if highlight_start >= 0:
+                # Prefer a complete emphasized phrase over a stranded green word.
+                cut_positions = [len(" ".join(words[:cut])) for cut in cuts]
+                score += sum(highlight_start < cut < highlight_end for cut in cut_positions) * max_w * 0.4
             if score < best[0]:
                 best = (score, lines)
+            if all(w <= max_w for w in widths) and (
+                best_fitting is None or score < best_fitting[0]
+            ):
+                best_fitting = (score, lines)
         fallback = best
-        if all(_line_width(font, line) <= max_w for line in best[1]):
-            return best[1]
+        if best_fitting is not None:
+            return best_fitting[1]
     return fallback[1]
 
 
@@ -1131,12 +1143,12 @@ def _highlight_color() -> tuple[int, int, int, int]:
 
 
 def _fit_cover_title(
-    text: str, max_w: float,
+    text: str, max_w: float, highlight: str = "",
 ) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, list[str]]:
     """Keep the preferred display scale, fitting longer hooks without clipping."""
     for size in range(_COVER_TITLE_FONT_SIZE, _COVER_TITLE_MIN_FONT_SIZE - 1, -1):
         font = _load_title_font(size)
-        lines = _wrap_title(text, font, max_w)
+        lines = _wrap_title(text, font, max_w, highlight)
         if len(lines) <= _TITLE_MAX_LINES and all(
             _line_width(font, line) <= max_w for line in lines
         ):
@@ -1153,7 +1165,7 @@ def _fit_cover_title(
 def _render_title_block(title: str, highlight: str) -> Image.Image:
     """Render the cover title onto a transparent 1080x1350 RGBA image.
 
-    Centered in the lower third, up to three lines, 90-128 px condensed bold
+    Centered in the lower third, up to three lines, 90-108 px condensed bold
     grotesk typography,
     uppercase, white, with the highlight phrase in a per-character horizontal
     single brand green (#8FB832), with no gradient or shade variation.
@@ -1168,19 +1180,22 @@ def _render_title_block(title: str, highlight: str) -> Image.Image:
     hl_end = hl_start + len(hl) if hl_start >= 0 else -1
 
     max_w = width * _TITLE_MAX_WIDTH_FRAC
-    font, lines = _fit_cover_title(text, max_w)
+    font, lines = _fit_cover_title(text, max_w, hl)
 
     draw = ImageDraw.Draw(canvas)
-    ascent, descent = font.getmetrics()
-    line_h = ascent + descent
-    gap = int(line_h * 0.10)
-    total_h = len(lines) * line_h + (len(lines) - 1) * gap
+    # Position visible capitals, not the font's invisible ascent/descent box.
+    # The Wan reference uses ~140px line advance and a ~1056px block center.
+    boxes = [font.getbbox(ch) for ch in text if not ch.isspace()]
+    glyph_top = min(box[1] for box in boxes)
+    glyph_bottom = max(box[3] for box in boxes)
+    line_advance = round(font.size * 1.30)
+    total_h = glyph_bottom - glyph_top + (len(lines) - 1) * line_advance
     top = int(height * _TITLE_CENTER_Y_FRAC - total_h / 2)
-    top = min(top, height - int(height * 0.06) - total_h)  # keep off the grid floor
+    top = min(top, int(height * 0.92) - total_h)
 
     global_idx = 0  # char index into `text` (lines re-join with single spaces)
     for line_no, line in enumerate(lines):
-        y = top + line_no * (line_h + gap)
+        y = top + line_no * line_advance - glyph_top
         x = (width - _line_width(font, line)) / 2
         for ch in line:
             if hl_start <= global_idx < hl_end:

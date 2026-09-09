@@ -35,8 +35,8 @@ inside the lower explanatory visual. The CTA uses an ink frame.
 - Inside-slide headings: exactly 76 px at 1080 px canvas width, Bricolage
   Grotesque or a close bold condensed grotesk, with tight editorial
   line-height. Every body and CTA headline uses this same size and face.
-- The cover keeps the same condensed family but uses its own larger 128 px
-  preferred display scale (90 px minimum when needed to fit three lines).
+- The cover uses bundled Anton at 108 px (90 px minimum when needed to fit
+  three lines), matching the earlier Wan cover's condensed display lettering.
   Never use the cover image or cover palette as a body-slide
   layout template.
 - Editorial emphasis: Instrument Serif or a close high-contrast serif, used

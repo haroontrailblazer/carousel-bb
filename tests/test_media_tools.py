@@ -6,11 +6,10 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from PIL import Image, ImageFont
+from PIL import Image
 
 from app.tools import media_tools
 from app.tools.brand_layout import ACCENT_GREEN, HEADLINE_FONT_SIZE, headline_font
-from app.tools.brand_layout import _HEADLINE_FONT_CANDIDATES
 
 
 class FindSourceClipTests(unittest.TestCase):
@@ -351,26 +350,42 @@ class CoverTypographyTests(unittest.TestCase):
     def test_cover_uses_largest_fitting_size_and_preserves_short_hook_scale(self) -> None:
         max_w = 1080 * media_tools._TITLE_MAX_WIDTH_FRAC
         font, _ = media_tools._fit_cover_title("AGENTS ACT", max_w)
-        self.assertEqual(font.size, 128)
-        # A single unbreakable token that fits at 96 px but not 128 px.
+        self.assertEqual(font.size, 108)
+        # A single unbreakable token that fits at 96 px but not 108 px.
         title = "M" * 10
         max_w = media_tools._line_width(media_tools._load_title_font(96), title)
         font, lines = media_tools._fit_cover_title(title, max_w)
-        self.assertEqual(font.size, 96)
+        self.assertGreaterEqual(font.size, 96)
+        self.assertLess(font.size, 108)
+        self.assertLessEqual(media_tools._line_width(font, title), max_w)
+        self.assertGreater(media_tools._line_width(media_tools._load_title_font(font.size + 1), title), max_w)
         self.assertEqual(lines, [title])
 
-    def test_muse_hook_fits_available_fallback_faces(self) -> None:
-        title = "MUSE CAN ACT FOR YOU. WOULD YOU LET IT"
-        max_w = 1080 * media_tools._TITLE_MAX_WIDTH_FRAC
-        for path in _HEADLINE_FONT_CANDIDATES:
-            if not path.is_file():
-                continue
-            with self.subTest(font=path.name):
-                with patch.object(media_tools, '_load_title_font',
-                                  side_effect=lambda size: ImageFont.truetype(str(path), size)):
-                    font, lines = media_tools._fit_cover_title(title, max_w)
-                    self.assertEqual(' '.join(lines), title)
-                    self.assertTrue(all(media_tools._line_width(font, line) <= max_w for line in lines))
+    def test_cover_font_is_bundled_and_independent_of_host_fonts(self) -> None:
+        with patch('app.tools.brand_layout.headline_font', side_effect=AssertionError('host font used')):
+            font = media_tools._load_title_font(108)
+        self.assertEqual(font.getname()[0], 'Anton')
+        self.assertTrue(Path(font.path).is_relative_to(Path(media_tools.__file__).resolve().parents[2]))
+
+    def test_highlight_stays_together_when_three_lines_allow_it(self) -> None:
+        title = 'MUSE KEEPS WORKING AFTER CLOSE'
+        font, lines = media_tools._fit_cover_title(title, 842.4, 'KEEPS WORKING')
+        self.assertEqual(' '.join(lines), title)
+        self.assertTrue(any('KEEPS WORKING' in line for line in lines))
+        self.assertTrue(all(media_tools._line_width(font, line) <= 842.4 for line in lines))
+
+    def test_visible_title_position_matches_wan_reference(self) -> None:
+        for title in ['WAN 3.0 BUILDS 30 SECOND SCENES WITH SOUND',
+                      'OPENAI WANTS TO OWN THE AI STACK',
+                      'MUSE KEEPS WORKING AFTER CLOSE']:
+            with self.subTest(title=title):
+                image = media_tools._render_title_block(title, '')
+                left, top, right, bottom = image.getbbox()
+                self.assertLessEqual(abs((top + bottom) / 2 - 1056), 3)
+                self.assertGreaterEqual(top, 850)
+                self.assertLessEqual(bottom, 1243)
+                self.assertGreaterEqual(left, 115)
+                self.assertLessEqual(right, 965)
 
     def test_cover_rejects_unreadably_long_token_with_recovery_instructions(self) -> None:
         with self.assertRaisesRegex(ValueError, "Shorten the title.*reuse the same media_path"):

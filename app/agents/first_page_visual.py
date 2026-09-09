@@ -516,7 +516,7 @@ other slide, never write body copy or captions, and never AI-generate media.
 - If build_cover reports that the title cannot fit, shorten the hook while
   preserving its meaning and retry build_cover with explicit title and
   highlight overrides. Reuse the same media; changing the image cannot fix
-  text overflow. The renderer fits titles from 128 px down to 90 px before
+  text overflow. The renderer fits bundled Anton from 108 px down to 90 px before
   requesting shorter copy.
 - Tools report failures as ok=false with an error message instead of crashing.
   Read the error, then try the next-best candidate (another video URL, then
