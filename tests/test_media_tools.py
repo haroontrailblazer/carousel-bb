@@ -6,10 +6,11 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from PIL import Image
+from PIL import Image, ImageFont
 
 from app.tools import media_tools
 from app.tools.brand_layout import ACCENT_GREEN, HEADLINE_FONT_SIZE, headline_font
+from app.tools.brand_layout import _HEADLINE_FONT_CANDIDATES
 
 
 class FindSourceClipTests(unittest.TestCase):
@@ -331,6 +332,49 @@ class CoverTypographyTests(unittest.TestCase):
         ).convert("RGBA")
         accent = (*ACCENT_GREEN, 255)
         self.assertIn(accent, rendered.getdata())
+
+    def test_failed_muse_hook_fits_without_losing_words_or_highlight(self) -> None:
+        title = "MUSE CAN ACT FOR YOU. WOULD YOU LET IT"
+        max_w = 1080 * media_tools._TITLE_MAX_WIDTH_FRAC
+        font, lines = media_tools._fit_cover_title(title, max_w)
+        self.assertEqual(" ".join(lines), title)
+        self.assertLessEqual(len(lines), 3)
+        self.assertTrue(all(media_tools._line_width(font, line) <= max_w for line in lines))
+        rendered = media_tools._render_title_block(title, "WOULD YOU LET IT")
+        self.assertIn((*ACCENT_GREEN, 255), rendered.getdata())
+        x0, y0, x1, y1 = rendered.getbbox()
+        self.assertGreaterEqual(x0, 100)
+        self.assertLessEqual(x1, 980)
+        self.assertGreater(y0, 0)
+        self.assertLess(y1, 1350)
+
+    def test_cover_uses_largest_fitting_size_and_preserves_short_hook_scale(self) -> None:
+        max_w = 1080 * media_tools._TITLE_MAX_WIDTH_FRAC
+        font, _ = media_tools._fit_cover_title("AGENTS ACT", max_w)
+        self.assertEqual(font.size, 128)
+        # A single unbreakable token that fits at 96 px but not 128 px.
+        title = "M" * 10
+        max_w = media_tools._line_width(media_tools._load_title_font(96), title)
+        font, lines = media_tools._fit_cover_title(title, max_w)
+        self.assertEqual(font.size, 96)
+        self.assertEqual(lines, [title])
+
+    def test_muse_hook_fits_available_fallback_faces(self) -> None:
+        title = "MUSE CAN ACT FOR YOU. WOULD YOU LET IT"
+        max_w = 1080 * media_tools._TITLE_MAX_WIDTH_FRAC
+        for path in _HEADLINE_FONT_CANDIDATES:
+            if not path.is_file():
+                continue
+            with self.subTest(font=path.name):
+                with patch.object(media_tools, '_load_title_font',
+                                  side_effect=lambda size: ImageFont.truetype(str(path), size)):
+                    font, lines = media_tools._fit_cover_title(title, max_w)
+                    self.assertEqual(' '.join(lines), title)
+                    self.assertTrue(all(media_tools._line_width(font, line) <= max_w for line in lines))
+
+    def test_cover_rejects_unreadably_long_token_with_recovery_instructions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Shorten the title.*reuse the same media_path"):
+            media_tools._render_title_block("W" * 80, "")
 
 
 if __name__ == "__main__":

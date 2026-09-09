@@ -92,6 +92,7 @@ _TEXT_PRIMARY = (232, 228, 214, 255)  # #E8E4D6
 _ACCENT_GREEN = (*ACCENT_GREEN, 255)  # #8FB832
 _TITLE_MAX_LINES = HEADLINE_MAX_LINES
 _COVER_TITLE_FONT_SIZE = 128
+_COVER_TITLE_MIN_FONT_SIZE = 90
 _TITLE_MAX_WIDTH_FRAC = 0.78
 _TITLE_CENTER_Y_FRAC = 0.79  # matches the template's own title-block center
 
@@ -1129,10 +1130,30 @@ def _highlight_color() -> tuple[int, int, int, int]:
     return _ACCENT_GREEN
 
 
+def _fit_cover_title(
+    text: str, max_w: float,
+) -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, list[str]]:
+    """Keep the preferred display scale, fitting longer hooks without clipping."""
+    for size in range(_COVER_TITLE_FONT_SIZE, _COVER_TITLE_MIN_FONT_SIZE - 1, -1):
+        font = _load_title_font(size)
+        lines = _wrap_title(text, font, max_w)
+        if len(lines) <= _TITLE_MAX_LINES and all(
+            _line_width(font, line) <= max_w for line in lines
+        ):
+            return font, lines
+    raise ValueError(
+        f"cover title cannot fit within {_TITLE_MAX_LINES} lines at the readable "
+        f"{_COVER_TITLE_MIN_FONT_SIZE}-{_COVER_TITLE_FONT_SIZE}px sizes. "
+        "Shorten the title (prefer 5-7 short words) and call build_cover again "
+        "with an explicit title and a verbatim highlight from that title; "
+        "reuse the same media_path and is_video."
+    )
+
+
 def _render_title_block(title: str, highlight: str) -> Image.Image:
     """Render the cover title onto a transparent 1080x1350 RGBA image.
 
-    Centered in the lower third, up to three lines, 128 px condensed bold
+    Centered in the lower third, up to three lines, 90-128 px condensed bold
     grotesk typography,
     uppercase, white, with the highlight phrase in a per-character horizontal
     single brand green (#8FB832), with no gradient or shade variation.
@@ -1147,15 +1168,7 @@ def _render_title_block(title: str, highlight: str) -> Image.Image:
     hl_end = hl_start + len(hl) if hl_start >= 0 else -1
 
     max_w = width * _TITLE_MAX_WIDTH_FRAC
-    font = _load_title_font(_COVER_TITLE_FONT_SIZE)
-    lines = _wrap_title(text, font, max_w)
-    if len(lines) > _TITLE_MAX_LINES or any(
-        _line_width(font, line) > max_w for line in lines
-    ):
-        raise ValueError(
-            f"cover title does not fit at the fixed {_COVER_TITLE_FONT_SIZE}px size "
-            f"within {_TITLE_MAX_LINES} lines"
-        )
+    font, lines = _fit_cover_title(text, max_w)
 
     draw = ImageDraw.Draw(canvas)
     ascent, descent = font.getmetrics()

@@ -378,7 +378,7 @@ async def build_cover(
             is_video,
             workdir,
         )
-    except (RuntimeError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+    except (ValueError, RuntimeError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "error": f"cover composition failed: {exc}"}
 
     video_path = Path(result["video_path"])
@@ -513,6 +513,11 @@ other slide, never write body copy or captions, and never AI-generate media.
 
 ## Failure handling
 
+- If build_cover reports that the title cannot fit, shorten the hook while
+  preserving its meaning and retry build_cover with explicit title and
+  highlight overrides. Reuse the same media; changing the image cannot fix
+  text overflow. The renderer fits titles from 128 px down to 90 px before
+  requesting shorter copy.
 - Tools report failures as ok=false with an error message instead of crashing.
   Read the error, then try the next-best candidate (another video URL, then
   the best image, then the placeholder background).

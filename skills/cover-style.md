@@ -31,7 +31,10 @@ Legacy orange is not used for new cover text or accent furniture.
    tight editorial line height, warm-white, with exactly one verbatim phrase
    in `#8FB832`. This is intentionally larger than the fixed 76 px inside-slide
    headline so the cover has correct feed-thumbnail proportion. Wrap to no
-   more than three balanced lines and never shrink it.
+   more than three balanced lines. Prefer 128 px; the compositor may reduce
+   only overflowing titles to a minimum of 90 px. If the title still does not
+   fit, shorten the hook and retry with the same media. Never clip the words
+   or shrink below the readable minimum.
 4. **Continuity furniture.** Preserve the faint perspective floor/grid and
    compact side-arrow cues from the current overlay, recolored to `#8FB832`.
 5. **Brand rail.** Keep the lower edge quiet. Do not add a second headline,

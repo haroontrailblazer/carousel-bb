@@ -36,7 +36,8 @@ inside the lower explanatory visual. The CTA uses an ink frame.
   Grotesque or a close bold condensed grotesk, with tight editorial
   line-height. Every body and CTA headline uses this same size and face.
 - The cover keeps the same condensed family but uses its own larger 128 px
-  display scale. Never use the cover image or cover palette as a body-slide
+  preferred display scale (90 px minimum when needed to fit three lines).
+  Never use the cover image or cover palette as a body-slide
   layout template.
 - Editorial emphasis: Instrument Serif or a close high-contrast serif, used
   sparingly for one phrase rather than whole paragraphs.
