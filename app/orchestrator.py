@@ -44,6 +44,7 @@ from typing import Any, AsyncGenerator, ClassVar, Optional, Sequence, Type, Type
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
+from google.adk.tools import ToolContext
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 from pydantic import BaseModel
@@ -53,8 +54,12 @@ from app import observability
 from app.agents.publisher import K_PUBLISH_RESULT
 from app.config import settings
 from app.schemas import CarouselPlan, NewsItem, QAReport, ReworkPlan, Verdict
-from app.services import db
+from app.services import db, instagram_config, telegram_delivery
 from app.state import (
+    K_DELIVERY_MODE,
+    K_INSTAGRAM_ACCOUNT_ID,
+    K_TELEGRAM_DELIVERY,
+    K_TELEGRAM_REVIEW_DELIVERY,
     K_REVIEW_NOTICE_FAILED,
     AGENT_CTA,
     AGENT_FEEDBACK_ROUTER,
@@ -550,16 +555,26 @@ class CarouselOrchestrator(BaseAgent):
             return
 
         if report.passed:
+            await instagram_config.load()
+            account = instagram_config.credentials()
             issue_count = len(report.issues)
             yield self._transition(
                 ctx,
                 PHASE_QA,
                 PHASE_REVIEW,
-                extra_delta={K_VERDICT: None},  # each review round starts clean
+                extra_delta={
+                    K_VERDICT: None,
+                    K_TELEGRAM_REVIEW_DELIVERY: None,
+                    K_DELIVERY_MODE: "instagram" if instagram_config.configured() else "telegram",
+                    K_INSTAGRAM_ACCOUNT_ID: account["user_id"],
+                },
                 note=f"QA passed, {issue_count} non-critical note(s)",
                 holder=holder,
             )
-            await self._record_phase_quietly(state, PHASE_REVIEW)
+            await self._record_phase_quietly(
+                state, PHASE_REVIEW,
+                status=db.RUN_STATUS_RUNNING if not instagram_config.configured() else db.RUN_STATUS_AWAITING_REVIEW,
+            )
             return
 
         plan = _safe_model(state, K_REWORK_PLAN, ReworkPlan)
@@ -585,6 +600,18 @@ class CarouselOrchestrator(BaseAgent):
         by an earlier invocation that stopped before routing), it is routed
         directly without re-running the dispatcher.
         """
+        await instagram_config.load()
+        if state.get(K_DELIVERY_MODE) == "telegram" or not instagram_config.configured():
+            async for event in self._deliver_to_telegram(ctx, state, holder):
+                yield event
+            return
+        account_id = instagram_config.credentials()["user_id"]
+        if state.get(K_INSTAGRAM_ACCOUNT_ID) != account_id:
+            # Consent for one account never grants consent for its replacement.
+            yield self._progress(ctx, "[review] Instagram account changed; requesting a fresh approval.", {
+                K_INSTAGRAM_ACCOUNT_ID: account_id, K_VERDICT: None,
+                K_TELEGRAM_REVIEW_DELIVERY: None,
+            })
         verdict = _safe_model(state, K_VERDICT, Verdict)
         if verdict is None:
             async for event in self._drive(
@@ -810,10 +837,51 @@ class CarouselOrchestrator(BaseAgent):
         )
         await self._record_phase_quietly(state, PHASE_QA)
 
+    async def _deliver_to_telegram(
+        self, ctx: InvocationContext, state: Any, holder: dict[str, bool]
+    ) -> AsyncGenerator[Event, None]:
+        """Finish after Telegram accepts the complete asset archive; retry failures."""
+        result = state.get(K_TELEGRAM_DELIVERY) or {}
+        if result.get("status") != "delivered":
+            try:
+                result = await telegram_delivery.deliver(ToolContext(ctx))
+            except Exception as exc:
+                holder["halted"] = True
+                yield self._progress(ctx, f"[delivery] Could not send the carousel to Telegram: {exc}. Resume to retry.", {
+                    K_DELIVERY_MODE: "telegram",
+                    K_TELEGRAM_DELIVERY: {
+                        **(getattr(exc, "result", None) or result),
+                        "status": "error", "message": str(exc),
+                    },
+                })
+                await self._record_phase_quietly(state, state.get(K_PHASE), status=db.RUN_STATUS_INTERRUPTED)
+                return
+            # Persist the receipt before cleanup so a retry after a database
+            # failure does not upload an already-delivered archive again.
+            yield self._progress(ctx, "[delivery] Finished carousel sent to Telegram.", {
+                K_TELEGRAM_DELIVERY: result, K_DELIVERY_MODE: "telegram",
+            })
+        await db.clear_pending_review(str(state.get(K_RUN_ID) or ""))
+        yield self._transition(ctx, state.get(K_PHASE), PHASE_DONE,
+            extra_delta={K_TELEGRAM_DELIVERY: result, K_DELIVERY_MODE: "telegram",
+                         K_VERDICT: None, K_REVIEW_NOTICE_FAILED: False},
+            note="Carousel complete and sent to Telegram", holder=holder)
+        await self._record_phase_quietly(state, PHASE_DONE)
+
     async def _phase_publish(
         self, ctx: InvocationContext, state: Any, holder: dict[str, bool]
     ) -> AsyncGenerator[Event, None]:
         """Publish: learner (optional approval feedback) -> publisher, -> done."""
+        await instagram_config.load()
+        if not instagram_config.configured():
+            async for event in self._deliver_to_telegram(ctx, state, holder):
+                yield event
+            return
+        if state.get(K_INSTAGRAM_ACCOUNT_ID) != instagram_config.credentials()["user_id"]:
+            yield self._transition(ctx, PHASE_PUBLISH, PHASE_REVIEW,
+                extra_delta={K_VERDICT: None}, note="Instagram account changed; fresh approval required", holder=holder)
+            await self._record_phase_quietly(state, PHASE_REVIEW)
+            return
         async for event in self._drive(self._child(AGENT_LEARNER), ctx, holder):
             yield event
         if holder["paused"]:
@@ -862,6 +930,8 @@ class CarouselOrchestrator(BaseAgent):
         result = state.get(K_PUBLISH_RESULT)
         if isinstance(result, dict) and result.get("media_id"):
             outcome = f"published ({result.get('permalink') or result.get('media_id')})"
+        elif (state.get(K_TELEGRAM_DELIVERY) or {}).get("status") == "delivered":
+            outcome = "completed and sent to Telegram"
         else:
             outcome = "not published"
         tokens_delta = _merge_token_usage(state, holder)

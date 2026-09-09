@@ -38,8 +38,10 @@ from app.runs.service import (
     resume_interrupted_run,
     start_run,
 )
-from app.services import db
+from app.services import db, instagram_config
 from app.state import (
+    K_DELIVERY_MODE,
+    K_TELEGRAM_DELIVERY,
     K_REVIEW_NOTICE_FAILED,
     AGENT_CTA,
     AGENT_FEEDBACK_ROUTER,
@@ -371,8 +373,11 @@ async def get_run(
         "publish": {
             "media_id": publish.get("media_id"),
             "permalink": publish.get("permalink"),
+            "notification_error": publish.get("mail_error") or None,
             "error": publish.get("message") if publish.get("status") == "error" else None,
         },
+        "telegram_delivery": state.get(K_TELEGRAM_DELIVERY) or None,
+        "delivery_mode": state.get(K_DELIVERY_MODE),
         "token_usage": state.get(K_TOKEN_USAGE, {}),
         "last_seq": last_seq,
         # The authoritative "is a decision still wanted?" flag. NOT monotonic:
@@ -968,6 +973,7 @@ async def meta(_identity: Identity = Depends(current_identity)) -> dict:
     Hard-coding them in TypeScript means a rename here produces blank rows in
     the UI with no error anywhere; serving them lets the client assert instead.
     """
+    await instagram_config.load()
     return {
         "agents": [
             AGENT_RESEARCH, AGENT_PLANNER, AGENT_FIRST_PAGE_VISUAL,
@@ -987,7 +993,7 @@ async def meta(_identity: Identity = Depends(current_identity)) -> dict:
         ],
         "reject_question": REJECT_QUESTION,
         "max_slides": settings.max_carousel_slides,
-        "publish_configured": bool(settings.ig_user_id and settings.ig_access_token),
+        "publish_configured": instagram_config.configured(),
     }
 
 

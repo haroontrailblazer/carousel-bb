@@ -24,6 +24,12 @@ import { ApiError, del, get, post, postBytes } from "@/lib/api"
 import { compressAvatar } from "@/lib/image"
 
 type TelegramStatus = {
+  bots: {
+    bot_id: string
+    bot_username: string
+    chat_id: string
+    token_masked: string
+  }[]
   connected: boolean
   /** False when SECRETS_KEY is absent - nothing can be stored safely. */
   secrets_ready: boolean
@@ -333,9 +339,9 @@ function TelegramSection() {
   })
 
   const disconnect = useMutation({
-    mutationFn: () => del<TelegramStatus>("/api/settings/telegram"),
+    mutationFn: (botId: string) => del<TelegramStatus>(`/api/settings/telegram/${encodeURIComponent(botId)}`),
     onSuccess: () => {
-      toast.success("Telegram disconnected")
+      toast.success("Telegram bot disconnected")
       refresh()
     },
     onError: (error) =>
@@ -348,15 +354,14 @@ function TelegramSection() {
   // telling a connected user to go and make a bot. Hold the space instead.
   const unknown = status.isLoading && !data
   const connected = !!data?.connected
-  const fromConsole = data?.source === "console"
   // Say so BEFORE someone types a bearer token into a form that will refuse
   // it - the server will not store a credential it cannot encrypt.
   const secretsMissing = data ? !data.secrets_ready : false
 
   return (
     <Section
-      title="Telegram"
-      description="Where carousel reviews are announced. The message carries the slides and a button that opens the review screen."
+      title="Telegram bots"
+      description="Every connected bot receives the same carousel, review request and publishing confirmation. The agent prepares each message once; the server sends it to all bots."
     >
       {unknown && (
         <div className="space-y-3">
@@ -370,10 +375,8 @@ function TelegramSection() {
       {!unknown && connected && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Chip tone="done" dot>
-            Connected
+            {data?.bots.length ?? 0} connected
           </Chip>
-          {data?.bot_username && <MutedChip>@{data.bot_username}</MutedChip>}
-          {data?.chat_id && <MutedChip>chat {data.chat_id}</MutedChip>}
         </div>
       )}
 
@@ -391,22 +394,25 @@ function TelegramSection() {
         </p>
       )}
 
-      {unknown ? null : connected && fromConsole ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="font-mono text-xs text-[var(--muted-foreground)]">
-            {data?.token_masked}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={disconnect.isPending}
-            onClick={() => disconnect.mutate()}
-          >
-            <Unplug /> {disconnect.isPending ? "Disconnecting..." : "Disconnect"}
-          </Button>
+      {!unknown && (data?.bots ?? []).length > 0 && (
+        <div className="mb-5 space-y-3">
+          {data?.bots.map((bot) => (
+            <div key={bot.bot_id} className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] p-3">
+              <div className="min-w-0 space-y-1">
+                <p className="font-medium">@{bot.bot_username}</p>
+                <MutedChip>chat {bot.chat_id}</MutedChip>
+                <p className="break-all font-mono text-xs text-[var(--muted-foreground)]">{bot.token_masked}</p>
+              </div>
+              <Button size="sm" variant="ghost" disabled={disconnect.isPending} onClick={() => disconnect.mutate(bot.bot_id)}>
+                <Unplug /> {disconnect.isPending && disconnect.variables === bot.bot_id ? "Disconnecting..." : "Disconnect"}
+              </Button>
+            </div>
+          ))}
         </div>
-      ) : (
+      )}
+      {!unknown && (
         <div className="space-y-3">
+          <p className="text-sm font-medium">{connected ? "Add another bot" : "Connect a bot"}</p>
           <ol className="space-y-1.5 text-sm text-[var(--muted-foreground)]">
             <li>
               1. Message{" "}
@@ -426,6 +432,8 @@ function TelegramSection() {
 
           <div className="flex flex-wrap gap-2">
             <Input
+              type="password"
+              aria-label="Telegram bot token"
               value={token}
               onChange={(event) => setToken(event.target.value)}
               placeholder="123456789:AA..."
@@ -438,7 +446,7 @@ function TelegramSection() {
               disabled={!token.trim() || connect.isPending || secretsMissing}
               onClick={() => connect.mutate()}
             >
-              <Send /> {connect.isPending ? "Connecting..." : "Connect"}
+              <Send /> {connect.isPending ? "Connecting..." : "Connect bot"}
             </Button>
           </div>
 
@@ -471,6 +479,72 @@ function TelegramSection() {
   )
 }
 
+type InstagramStatus = {
+  connected: boolean
+  secrets_ready: boolean
+  user_id: string
+  username: string
+}
+
+function InstagramSection() {
+  const queryClient = useQueryClient()
+  const [token, setToken] = React.useState("")
+  const status = useQuery({
+    queryKey: ["settings", "instagram"],
+    queryFn: () => get<InstagramStatus>("/api/settings/instagram"),
+  })
+  const refresh = (data: InstagramStatus) => {
+    queryClient.setQueryData(["settings", "instagram"], data)
+    void queryClient.invalidateQueries({ queryKey: ["meta"] })
+  }
+  const connect = useMutation({
+    mutationFn: () => post<InstagramStatus>("/api/settings/instagram", { token: token.trim() }),
+    onSuccess: (data) => {
+      setToken("")
+      refresh(data)
+      toast.success(`Instagram connected: @${data.username}`)
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const disconnect = useMutation({
+    mutationFn: () => del<InstagramStatus>("/api/settings/instagram"),
+    onSuccess: (data) => {
+      refresh(data)
+      toast.success("Instagram disconnected — carousels will finish in Telegram")
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  return (
+    <Section title="Instagram · Optional" description="Connect one account to approve and publish. Without Instagram, the agent completes your carousel and sends the assets and caption to Telegram.">
+      {status.isPending ? <Skeleton className="h-10 w-full" /> : status.isError ? (
+        <p role="alert" className="text-sm text-[var(--destructive)]">Could not load Instagram settings. <button className="underline" onClick={() => void status.refetch()}>Try again</button></p>
+      ) : status.data?.connected ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-medium">@{status.data.username}</p>
+            <p className="text-sm text-[var(--muted-foreground)]">One account connected. Disconnect it to use another.</p>
+          </div>
+          <Button variant="secondary" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>
+            <Unplug /> {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-[var(--muted-foreground)]">Use the separate Instagram account’s own Instagram Login access token, with publishing permission, for a Business or Creator account.</p>
+          {!status.data?.secrets_ready && <p className="text-sm text-[var(--destructive)]">Set SECRETS_KEY on the server to enable encrypted token storage.</p>}
+          <label htmlFor="instagram-token" className="block text-sm font-medium">Instagram access token</label>
+          <div className="flex flex-wrap gap-2">
+            <Input id="instagram-token" type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Paste the account’s token" className="min-w-0 flex-1" />
+            <Button variant="brand" disabled={!token.trim() || connect.isPending || !status.data?.secrets_ready} onClick={() => connect.mutate()}>
+              {connect.isPending ? "Connecting…" : "Connect Instagram"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Section>
+  )
+}
+
 export function ProfileRoute() {
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -478,6 +552,7 @@ export function ProfileRoute() {
       <IdentitySection />
       <AppearanceSection />
       <TelegramSection />
+      <InstagramSection />
     </div>
   )
 }

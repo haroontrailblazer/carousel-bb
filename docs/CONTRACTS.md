@@ -9,7 +9,9 @@ code-level contracts. If a task conflicts with this file, this file wins.
 - Python 3.11+ (dev venv: `.venv`, Python 3.13). Windows-friendly paths
   (always `pathlib`, never hard-coded `/tmp` - use `settings.workdir`).
 - NO git operations anywhere. Never commit, never push.
-- Secrets ONLY via `app.config.settings` (env-driven). Never hard-code keys.
+- Infrastructure secrets use `app.config.settings`. Telegram and optional
+  Instagram account tokens are connected from Profile and encrypted in
+  `app_config` with `SECRETS_KEY`. Never hard-code keys.
 - Every agent lives in its own file under `app/agents/`, exposing a builder
   function `build_<name>_agent() -> BaseAgent`-compatible object.
 - Agent display/routing names come from `app/state.py` constants - never
@@ -55,6 +57,27 @@ from google.genai import types  # Content/Part for messages & function responses
   VERSION and note the difference in your report.
 
 ## The orchestrator state machine (app/orchestrator.py)
+
+Instagram is optional. After QA passes, `K_DELIVERY_MODE` records either
+`instagram` or `telegram`. With no Instagram connection, the review handler
+delivers all finished assets and the caption as a Telegram ZIP without running
+the Review Dispatcher or Publisher. Success records `K_TELEGRAM_DELIVERY` and
+finishes at `done`; failure is `interrupted`, so Resume retries delivery.
+The `review` phase is `running` during delivery, not `awaiting_review`.
+
+Telegram supports multiple encrypted bot connections in `app_config.telegram.bots`.
+Legacy single-bot settings are preserved; connects update by bot ID under a
+row lock, and disconnect removes one bot. The tool layer broadcasts one prepared
+output to all bots in Python; the agent must not loop over destinations or
+regenerate content per recipient. `K_TELEGRAM_REVIEW_DELIVERY` holds receipts
+for the current review round; `K_TELEGRAM_DELIVERY` holds archive receipts.
+Retries skip successful bot/chat pairs, and a new review round resets receipts.
+
+One Instagram Login account may be connected using its own token. Its ID is
+discovered from the token and recorded in `K_INSTAGRAM_ACCOUNT_ID` before
+review. Publishing requires a human-approved `K_VERDICT` and the same connected
+account ID. Replacing the account requires disconnecting first and a fresh
+approval. There is no Facebook Login or environment token fallback.
 
 The review pause ends the invocation; the resume is a NEW invocation. The root
 agent is therefore a re-entrant state machine over `state[K_PHASE]`:

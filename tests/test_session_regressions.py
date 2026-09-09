@@ -290,11 +290,13 @@ class AmbiguousPublishIsNotRetriedTests(unittest.TestCase):
             },
         )()
         with patch.object(instagram_tools, "_graph_request", fake_request), \
-             patch.object(instagram_tools, "settings", fake_settings):
+             patch.object(instagram_tools, "settings", fake_settings), \
+             patch.object(instagram_tools.instagram_config, "_cache", {"user_id": "ig-1", "access_token": "tok"}):
             with self.assertRaises(instagram_tools.PublishUncertain) as caught:
                 instagram_tools.publish_carousel(
                     {"caption": "c"},
                     ["https://x/a.mp4", "https://x/b.png"],
+                    expected_account_id="ig-1",
                 )
 
         self.assertTrue(

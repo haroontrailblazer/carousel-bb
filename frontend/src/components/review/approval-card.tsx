@@ -81,6 +81,49 @@ export function ApprovalCard({
     ? "rounded-none border-0 bg-transparent p-0 shadow-none"
     : "p-5"
 
+  if (run.publish.media_id) {
+    return (
+      <Card className={panelClass}>
+        <p className="font-medium">Published to Instagram</p>
+        {run.publish.permalink && (
+          <Button size="sm" variant="secondary" className="mt-3" asChild>
+            <a href={run.publish.permalink} target="_blank" rel="noreferrer">View on Instagram <ExternalLink /></a>
+          </Button>
+        )}
+        {run.publish.notification_error && (
+          <p className="mt-3 text-sm text-[var(--destructive)]" role="alert">The post is live, but its Telegram confirmation was not delivered to every bot. {run.publish.notification_error}</p>
+        )}
+      </Card>
+    )
+  }
+
+  if (run.status === "done" && !run.publish.media_id) {
+    return (
+      <Card className={panelClass}>
+        <p className="font-medium">Carousel complete</p>
+        <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+          {run.telegram_delivery?.status === "delivered"
+            ? "The finished assets and caption were sent to Telegram."
+            : "Your finished carousel is ready to download."}
+        </p>
+      </Card>
+    )
+  }
+  if (!run.publish.media_id && (run.delivery_mode === "telegram" || !publishConfigured)) {
+    return (
+      <Card className={panelClass}>
+        <p className="font-medium">Delivery to Telegram</p>
+        <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+          {run.telegram_delivery?.status === "error"
+            ? `${run.telegram_delivery.message} Resume the task to retry delivery.`
+            : run.status === "awaiting_review"
+              ? "Instagram is disconnected. Resume the task to send the finished carousel to Telegram without approval."
+              : "The agent will finish and send the carousel assets and caption to Telegram. No publishing approval is needed."}
+        </p>
+      </Card>
+    )
+  }
+
   // --- state 2: already decided ------------------------------------------
   if (!run.pending_review && run.verdict) {
     const approved = run.verdict.status === "approved"
@@ -253,19 +296,6 @@ export function ApprovalCard({
             </Button>
           )}
         </div>
-      )}
-
-      {!publishConfigured && (
-        <p
-          className="mb-4 rounded-[var(--radius-md)] px-3 py-2 text-sm"
-          style={{
-            background: "var(--phase-review-soft)",
-            color: "var(--phase-review-fg)",
-          }}
-        >
-          Instagram is not configured (IG_USER_ID / IG_ACCESS_TOKEN). Approving
-          will record the verdict, but publishing will fail.
-        </p>
       )}
 
       {coverChoiceNeeded && (

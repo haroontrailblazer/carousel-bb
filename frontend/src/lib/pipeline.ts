@@ -114,7 +114,7 @@ export const PHASE_TOKEN: Record<string, string> = {
 export const STATUS_LABELS: Record<RunStatus, string> = {
   running: "Running",
   awaiting_review: "Needs your review",
-  done: "Published",
+  done: "Completed",
   interrupted: "Interrupted",
   failed: "Failed",
   cancelled: "Cancelled",

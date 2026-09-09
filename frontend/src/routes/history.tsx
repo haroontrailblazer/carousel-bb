@@ -18,7 +18,7 @@ const FILTERS: { label: string; value: RunStatus | "all" }[] = [
   { label: "All", value: "all" },
   { label: "Needs review", value: "awaiting_review" },
   { label: "Running", value: "running" },
-  { label: "Published", value: "done" },
+  { label: "Completed", value: "done" },
   { label: "Interrupted", value: "interrupted" },
   { label: "Failed", value: "failed" },
 ]

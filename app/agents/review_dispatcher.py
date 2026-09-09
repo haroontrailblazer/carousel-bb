@@ -61,6 +61,7 @@ from app.llm import resolve_model
 from app.schemas import Bundle, Verdict
 from app.services import db
 from app.state import (
+    K_TELEGRAM_REVIEW_DELIVERY,
     AGENT_REVIEW_DISPATCHER,
     K_REVIEW_NOTICE_FAILED,
     K_BUNDLE,
@@ -353,13 +354,19 @@ async def send_review_request(tool_context: ToolContext) -> dict:
     try:
         # telegram_tools.send_review_message is synchronous (httpx with an
         # explicit 60 s timeout); run it off the event loop.
+        previous = state.get(K_TELEGRAM_REVIEW_DELIVERY) or {}
         result = await asyncio.to_thread(
-            telegram_tools.send_review_message, run_id, payload, round_no
+            telegram_tools.send_review_message, run_id, payload, round_no,
+            previous=previous if previous.get("round") == round_no else None,
         )
+    except telegram_tools.BroadcastError as exc:
+        state[K_TELEGRAM_REVIEW_DELIVERY] = {**exc.result, "round": round_no}
+        return {"status": "error", "error": str(exc)}
     except Exception as exc:
         logger.exception("Review message failed for run %s round %s.", run_id, round_no)
         return {"status": "error", "error": f"Review message failed: {exc}"}
 
+    state[K_TELEGRAM_REVIEW_DELIVERY] = {**result, "round": round_no}
     state[K_REVIEW_ROUND] = round_no  # count the round only after a real send
     state[_SENT_KEY] = round_no  # ...and authorise the pause for THIS round
     logger.info(

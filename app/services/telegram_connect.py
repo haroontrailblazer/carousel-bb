@@ -31,8 +31,9 @@ TIMEOUT_S = 15.0
 
 WELCOME_TEXT = (
     "Hi - you are successfully connected.\n\n"
-    "Carousel Factory will send carousel reviews to this chat. Each one comes "
-    "with the slides and a button that opens the review screen."
+    "Carousel Factory will send completed carousels to this chat. If Instagram "
+    "is connected, you will receive review requests and publishing confirmations. "
+    "Every connected bot receives the same updates."
 )
 
 

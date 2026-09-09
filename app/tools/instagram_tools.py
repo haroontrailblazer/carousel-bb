@@ -13,8 +13,8 @@ API (Graph API version ``settings.ig_api_version``):
 4. ``POST /{ig_user_id}/media_publish`` with the parent container id.
 5. ``GET /{media_id}?fields=permalink`` and return both ids.
 
-All credentials come from :mod:`app.config` (``ig_user_id``,
-``ig_access_token``, ``ig_api_version``) - never hard-coded. Every HTTP call
+Credentials come from the one console-connected Instagram account.
+The API version comes from settings. Every HTTP call
 carries an explicit timeout, and any Graph API error payload is raised as a
 ``RuntimeError`` that includes Instagram's error message.
 """
@@ -27,10 +27,10 @@ from typing import Any, Callable, Mapping, Optional
 import httpx
 
 from app.config import settings
+from app.services import instagram_config
 
-# Instagram Graph API lives on the Facebook Graph host for IG professional
-# accounts connected through Facebook Login.
-_GRAPH_HOST = "https://graph.facebook.com"
+# The account's own Instagram Login token, without Facebook Page login.
+_GRAPH_HOST = "https://graph.instagram.com"
 
 # Explicit network timeouts (seconds) for every request.
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
@@ -132,12 +132,11 @@ def _is_video_url(public_url: str) -> bool:
 
 
 def _create_child_container(
-    client: httpx.Client, public_url: str, *, is_video: bool
+    client: httpx.Client, public_url: str, *, is_video: bool, user_id: str
 ) -> str:
     """Create one carousel child container and return its container id."""
     data: dict[str, Any] = {
         "is_carousel_item": "true",
-        "access_token": settings.ig_access_token,
     }
     if is_video:
         data["media_type"] = "VIDEO"
@@ -145,7 +144,7 @@ def _create_child_container(
     else:
         data["image_url"] = public_url
     payload = _graph_request(
-        client, "POST", f"/{settings.ig_user_id}/media", data=data
+        client, "POST", f"/{user_id}/media", data=data
     )
     container_id = payload.get("id")
     if not container_id:
@@ -225,7 +224,6 @@ def _wait_until_finished(
             f"/{container_id}",
             params={
                 "fields": "status_code,status",
-                "access_token": settings.ig_access_token,
             },
         )
         last_status = str(payload.get("status_code", "UNKNOWN"))
@@ -249,18 +247,17 @@ def _wait_until_finished(
 
 
 def _create_parent_container(
-    client: httpx.Client, child_ids: list[str], caption: str
+    client: httpx.Client, child_ids: list[str], caption: str, user_id: str
 ) -> str:
     """Create the CAROUSEL parent container and return its id."""
     payload = _graph_request(
         client,
         "POST",
-        f"/{settings.ig_user_id}/media",
+        f"/{user_id}/media",
         data={
             "media_type": "CAROUSEL",
             "children": ",".join(child_ids),
             "caption": caption,
-            "access_token": settings.ig_access_token,
         },
     )
     parent_id = payload.get("id")
@@ -276,6 +273,7 @@ def publish_carousel(
     bundle: dict,
     public_urls: list[str],
     should_continue: Optional[Callable[[], bool]] = None,
+    *, expected_account_id: str = "",
 ) -> dict:
     """Publish the approved carousel to Instagram and return its identity.
 
@@ -311,15 +309,27 @@ def publish_carousel(
             f"Carousel needs at least {_MIN_CAROUSEL_CHILDREN} slides; "
             f"got {len(public_urls)}."
         )
-    if not settings.ig_user_id or not settings.ig_access_token:
+    creds = instagram_config.credentials()
+    user_id = creds["user_id"]
+    if not user_id or not creds["access_token"]:
         raise RuntimeError(
-            "Instagram credentials are not configured: set IG_USER_ID and "
-            "IG_ACCESS_TOKEN in the environment (.env)."
+            "No Instagram account is connected. Connect one from Profile."
         )
+    if not expected_account_id or expected_account_id != user_id:
+        raise RuntimeError("The connected Instagram account needs a fresh approval.")
+
+    caller_wants = should_continue
+
+    def still_connected() -> bool:
+        return (instagram_config.credentials()["user_id"] == user_id
+                and instagram_config.configured()
+                and (caller_wants is None or caller_wants()))
+
+    should_continue = still_connected
 
     caption = str(bundle.get("caption", "") or "")
 
-    with httpx.Client(timeout=_TIMEOUT) as client:
+    with httpx.Client(timeout=_TIMEOUT, headers={"Authorization": f"Bearer {creds['access_token']}"}) as client:
         # (1) Child containers, typed by what each URL actually is.
         #
         # This used to assume the first item was always a video, because the
@@ -331,7 +341,7 @@ def publish_carousel(
         for url in public_urls:
             _still_wanted(should_continue)
             child_ids.append(
-                _create_child_container(client, url, is_video=_is_video_url(url))
+                _create_child_container(client, url, is_video=_is_video_url(url), user_id=user_id)
             )
 
         # (2) Wait for every child (video transcode is asynchronous).
@@ -340,7 +350,7 @@ def publish_carousel(
 
         # (3) Parent CAROUSEL container; poll it too before publishing.
         _still_wanted(should_continue)
-        parent_id = _create_parent_container(client, child_ids, caption)
+        parent_id = _create_parent_container(client, child_ids, caption, user_id)
         _wait_until_finished(client, parent_id, should_continue)
 
         # (4) Publish. The last checkpoint - after this the post is live and
@@ -350,10 +360,9 @@ def publish_carousel(
             publish_payload = _graph_request(
                 client,
                 "POST",
-                f"/{settings.ig_user_id}/media_publish",
+                f"/{user_id}/media_publish",
                 data={
                     "creation_id": parent_id,
-                    "access_token": settings.ig_access_token,
                 },
             )
         except (httpx.TimeoutException, httpx.TransportError) as exc:
@@ -379,7 +388,6 @@ def publish_carousel(
             f"/{media_id}",
             params={
                 "fields": "permalink",
-                "access_token": settings.ig_access_token,
             },
         )
         permalink = str(permalink_payload.get("permalink", ""))

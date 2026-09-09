@@ -58,9 +58,9 @@ init_observability()
 
 _ORCHESTRATOR_DESCRIPTION = (
     "Carousel Factory orchestrator: turns one queued AI/product news item "
-    "into a human-reviewed Instagram carousel. Re-entrant phase machine: "
+    "into a carousel delivered to Telegram, with optional Instagram publishing. Re-entrant phase machine: "
     "generate (plan, cover video, copy, slides, CTA) -> qa (stitch + verify) "
-    "-> review (mail + pause for the human verdict) -> publish or rework -> "
+    "-> Telegram delivery, or review (pause for human approval) -> publish or rework -> "
     "done."
 )
 

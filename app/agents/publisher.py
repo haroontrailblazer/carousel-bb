@@ -32,10 +32,10 @@ from google.adk.tools import FunctionTool, ToolContext
 
 from app.config import agent_instructions, settings
 from app.llm import resolve_model
-from app.schemas import Bundle
-from app.services import db
+from app.schemas import Bundle, Verdict
+from app.services import db, instagram_config
 from app.services.artifact_service import SupabaseArtifactService
-from app.state import AGENT_PUBLISHER, K_BUNDLE, K_RUN_ID, PHASE_DONE, get_model
+from app.state import AGENT_PUBLISHER, K_BUNDLE, K_RUN_ID, K_VERDICT, K_INSTAGRAM_ACCOUNT_ID, PHASE_DONE, get_model
 from app.tools import instagram_tools, telegram_tools
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,15 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
         )
         return {**existing, "status": "already_published"}
 
+    await instagram_config.load()
+    verdict = get_model(state, K_VERDICT, Verdict)
+    account_id = str(state.get(K_INSTAGRAM_ACCOUNT_ID) or "")
+    if (not verdict or verdict.status != "approved" or not account_id
+            or account_id != instagram_config.credentials()["user_id"]):
+        result = {"status": "error", "message": "Human approval for the connected Instagram account is required."}
+        state[K_PUBLISH_RESULT] = result
+        return result
+
     bundle = get_model(state, K_BUNDLE, Bundle)
     if bundle is None:
         return {
@@ -173,6 +182,7 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
             bundle.model_dump(mode="json"),
             public_urls,
             should_continue=lambda: not cancellation.is_requested(run_id),
+            expected_account_id=account_id,
         )
     except asyncio.CancelledError:
         # Stop cancels the driving task, and CancelledError lands HERE - at
@@ -233,6 +243,7 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
     # mail failure must not fail the publish.
     confirmation_message_id = ""
     mail_error = ""
+    mail_result = {}
     try:
         mail_result = await asyncio.to_thread(
             telegram_tools.send_confirmation_message, run_id, permalink
@@ -241,6 +252,7 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Confirmation mail failed for run %s.", run_id)
         mail_error = str(exc)
+        mail_result = getattr(exc, "result", {})
 
     # (4) Record completion in the runs table - best-effort as well.
     db_error = ""
@@ -259,6 +271,7 @@ async def publish_approved_carousel(tool_context: ToolContext) -> dict:
         "permalink": permalink,
         "public_url_count": len(public_urls),
         "confirmation_message_id": confirmation_message_id,
+        "confirmation_delivery": mail_result,
         "mail_error": mail_error,
         "db_error": db_error,
         "published_at": datetime.now(timezone.utc).isoformat(),

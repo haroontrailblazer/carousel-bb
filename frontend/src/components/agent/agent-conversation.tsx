@@ -178,7 +178,7 @@ export function startedFromComposer(run: Pick<RunDetail, "source">): boolean {
 
 function agentActivityLabel(run: RunDetail, events: RunEvent[]): string {
   if (run.status === "awaiting_review") return "Your carousel is ready for review"
-  if (run.status === "done") return "Carousel published"
+  if (run.status === "done") return run.publish.media_id ? "Carousel published" : run.telegram_delivery?.status === "delivered" ? "Carousel complete · sent to Telegram" : "Carousel complete"
   if (run.status === "cancelled") return "Task cancelled"
   if (run.status === "failed") return "The carousel agent stopped"
   if (run.status === "interrupted") return "The background task was interrupted"

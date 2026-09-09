@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app.services import avatar_store, secret_box, telegram_config
+from app.services import avatar_store, secret_box, telegram_config, instagram_config
+from app.services.instagram_connect import verify_token as verify_instagram_token
 from app.services.telegram_connect import (
     ConnectError,
     discover_chat,
@@ -31,6 +32,51 @@ from web_api.deps import current_identity
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class InstagramConnectRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=4096, repr=False)
+
+
+def _instagram_status() -> dict:
+    creds = instagram_config.credentials()
+    return {
+        "connected": instagram_config.configured(),
+        "secrets_ready": secret_box.configured(),
+        "user_id": creds["user_id"], "username": creds["username"],
+        "connected_at": creds["connected_at"],
+    }
+
+
+@router.get("/settings/instagram")
+async def instagram_status(_identity: Identity = Depends(current_identity)) -> dict:
+    await instagram_config.load()
+    return _instagram_status()
+
+
+@router.post("/settings/instagram")
+async def instagram_connect(payload: InstagramConnectRequest,
+                            identity: Identity = Depends(current_identity)) -> dict:
+    if not secret_box.configured():
+        raise HTTPException(503, {"code": "secrets_unconfigured", "message": "Set SECRETS_KEY before connecting Instagram."})
+    try:
+        account = await asyncio.to_thread(verify_instagram_token, payload.token.strip())
+    except ValueError as exc:
+        raise HTTPException(400, {"code": "invalid_token", "message": str(exc)}) from exc
+    try:
+        await instagram_config.save(
+            access_token=payload.token.strip(), **account,
+            connected_by=identity.email, connected_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except ValueError as exc:
+        raise HTTPException(409, {"code": "account_connected", "message": str(exc)}) from exc
+    return _instagram_status()
+
+
+@router.delete("/settings/instagram")
+async def instagram_disconnect(_identity: Identity = Depends(current_identity)) -> dict:
+    await instagram_config.clear()
+    return _instagram_status()
 
 
 class TelegramConnectRequest(BaseModel):
@@ -58,12 +104,18 @@ def _status() -> dict:
         "token_masked": _mask(creds["bot_token"]),
         "connected_by": creds["connected_by"],
         "connected_at": creds["connected_at"],
+        "bots": [{
+            "bot_id": bot["bot_id"], "bot_username": bot["bot_username"],
+            "chat_id": bot["chat_id"], "token_masked": _mask(bot["bot_token"]),
+            "connected_by": bot["connected_by"], "connected_at": bot["connected_at"],
+        } for bot in telegram_config.all_credentials()],
     }
 
 
 @router.get("/settings/telegram")
 async def telegram_status(_identity: Identity = Depends(current_identity)) -> dict:
-    """Whether a bot is connected, and which one."""
+    """List connected bots without returning their tokens."""
+    await telegram_config.load()
     return _status()
 
 
@@ -115,6 +167,7 @@ async def telegram_connect(
 
     try:
         await telegram_config.save(
+            bot_id=str(bot.get("id") or ""),
             bot_token=token,
             chat_id=chat_id,
             bot_username=str(bot.get("username") or ""),
@@ -137,13 +190,14 @@ async def telegram_connect(
     return {"result": "connected", **_status()}
 
 
-@router.delete("/settings/telegram")
+@router.delete("/settings/telegram/{bot_id}")
 async def telegram_disconnect(
+    bot_id: str,
     identity: Identity = Depends(current_identity),
 ) -> dict:
-    """Forget the stored bot. Any .env fallback takes over again."""
-    await telegram_config.clear()
-    logger.info("Telegram credentials cleared by %s.", identity.email)
+    """Remove one connected bot."""
+    await telegram_config.clear(bot_id)
+    logger.info("Telegram bot %s disconnected by %s.", bot_id, identity.email)
     return {"result": "disconnected", **_status()}
 
 

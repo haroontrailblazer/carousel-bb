@@ -97,8 +97,7 @@ class Settings:
     secrets_key: str = os.getenv("SECRETS_KEY", "")
 
     # --- instagram ---
-    ig_user_id: str = os.getenv("IG_USER_ID", "")
-    ig_access_token: str = os.getenv("IG_ACCESS_TOKEN", "")
+    # One optional account is connected from Profile using its own token.
     ig_api_version: str = os.getenv("IG_API_VERSION", "v23.0")
 
     # --- CTA destinations ---

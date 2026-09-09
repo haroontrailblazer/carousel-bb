@@ -989,7 +989,7 @@ async def interrupted_run_candidates(min_idle_seconds: int = 180) -> list[dict]:
     rows = await pool.fetch(
         """
         SELECT * FROM runs
-        WHERE phase = ANY($1::text[])
+        WHERE (phase = ANY($1::text[]) OR (phase = 'review' AND status = 'running'))
           AND status <> ALL($2::text[])
           AND updated_at < now() - make_interval(secs => $3)
         ORDER BY created_at DESC

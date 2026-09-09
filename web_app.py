@@ -59,7 +59,7 @@ from app.review.resume import drain_resume_tasks
 from app.runs.recovery import reconcile_on_startup, release_stuck_queue_items
 from app.runs.service import drain_run_tasks
 from app.scheduler import shutdown_scheduler, start_scheduler
-from app.services import db, telegram_config
+from app.services import db, telegram_config, instagram_config
 from web_api.auth import AuthMiddleware, build_verifier, validate_session_secret
 from web_api.routes_auth import router as auth_router
 from web_api.routes_runs import router as runs_router
@@ -137,6 +137,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # review dispatcher can send without a restart after someone connects
         # a bot from the profile page.
         await telegram_config.load()
+        await instagram_config.load()
         try:
             seeded = await db.seed_app_users(list(settings.auth_bootstrap_emails))
             if seeded:

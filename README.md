@@ -83,9 +83,32 @@ point `FFMPEG_BIN` in `.env` at the executable.
 copy .env.example .env            # macOS/Linux: cp .env.example .env
 ```
 
-Fill in every section of `.env` - LLM keys, Supabase, Gmail, Instagram, CTA
-links, fetch sources. All secrets flow through `app/config.py`; nothing is
-hard-coded. Never commit `.env`.
+Configure the LLM keys, Supabase, CTA links and fetch sources in `.env`.
+Connect Telegram from **Profile → Telegram**. Never commit `.env`.
+
+You can connect multiple Telegram bots. Each bot has its own token and chat;
+adding another preserves the existing connections, and disconnect removes
+only the selected bot. Existing single-bot settings are preserved automatically.
+The agent prepares each output once. Python broadcasts reviews, completed
+archives and publishing confirmations to all connected bots, with no extra
+model calls or content generation per bot. Telegram still requires a separate
+upload/send for each bot. Review and archive delivery retries skip destinations
+with saved successful receipts, and every bot is attempted even if one fails.
+
+Instagram is optional. Without it, the agent finishes QA, sends a ZIP of all
+carousel assets and `caption.txt` to Telegram, and completes without approval.
+If delivery fails, the task is interrupted and **Resume** retries delivery.
+
+To publish, connect **one** separate account from **Profile → Instagram** by
+pasting that account's own Instagram Login user access token. Use a Business
+or Creator account with `instagram_business_basic` and
+`instagram_business_content_publish` permissions. This uses the
+[Instagram Login API](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/),
+without a Facebook Page login. The account ID is discovered from the token.
+Tokens are encrypted in `app_config` using `SECRETS_KEY`; `IG_USER_ID` and
+`IG_ACCESS_TOKEN` environment credentials are no longer used. Disconnect the
+current account before connecting another. Connected runs request human
+approval before publishing; changing the account requires a fresh approval.
 
 `IG_HANDLE` defaults to `@baskaranbuilds`. The final CTA rail uses the same
 single official favicon and handle arrangement as the other slides.

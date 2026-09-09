@@ -60,7 +60,9 @@ export type RunDetail = RunSummary & {
   slide_count: number
   qa: { passed: boolean | null; issues: QAIssue[] }
   verdict: { status: string; feedback: string; reviewer?: string } | null
-  publish: { media_id: string | null; permalink: string | null; error: string | null }
+  publish: { media_id: string | null; permalink: string | null; error: string | null; notification_error?: string | null }
+  delivery_mode?: "instagram" | "telegram" | null
+  telegram_delivery?: { status: string; message_id?: string; message?: string } | null
   token_usage: Record<string, number>
   last_seq: number
   /**
@@ -225,8 +227,7 @@ export type Meta = {
   statuses: RunStatus[]
   reject_question: string
   max_slides: number
-  /** False when IG_USER_ID / IG_ACCESS_TOKEN are unset: approving will still
-   *  record the verdict, but publishing will fail loudly. */
+  /** Without a connected Instagram account, completed assets go to Telegram. */
   publish_configured: boolean
 }
 

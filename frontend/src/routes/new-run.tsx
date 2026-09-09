@@ -204,7 +204,7 @@ export function NewRunRoute() {
           </div>
 
           <p className="mt-5 text-center text-[11px] leading-5 text-[var(--muted-foreground)]">
-            Carousel Factory can make mistakes. Every carousel pauses for human review before publishing.
+            Carousels are sent to Telegram when complete. Connect Instagram to review, approve and publish.
           </p>
         </div>
       </main>
